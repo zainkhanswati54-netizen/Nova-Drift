@@ -9,6 +9,7 @@ import '../widgets/mode_card.dart';
 import '../widgets/starfield_background.dart';
 import 'gameplay_screen.dart';
 import 'level_select_screen.dart';
+import 'settings_screen.dart';
 
 /// "SELECT A GAME MODE" - the main menu.
 /// The background palette slowly cycles (blue -> red -> green -> orange),
@@ -339,7 +340,9 @@ class _BottomBar extends StatelessWidget {
           width: 150,
           icon: Icons.settings,
           label: 'SETTINGS',
-          onPressed: () => showComingSoon(context, 'Settings'),
+          onPressed: () => Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => const SettingsScreen()),
+          ),
         ),
       ],
     );

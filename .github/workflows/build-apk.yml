@@ -32,6 +32,9 @@ jobs:
       - name: Get dependencies
         run: flutter pub get
 
+      - name: Generate app icon
+        run: dart run flutter_launcher_icons
+
       - name: Analyze code
         run: flutter analyze --no-fatal-infos
         continue-on-error: true
@@ -39,23 +42,11 @@ jobs:
       - name: Build release APK
         run: flutter build apk --release
 
-      - name: Build split APKs (smaller size per device)
-        run: flutter build apk --release --split-per-abi
-
-      - name: Upload universal APK
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: nova-drift-universal-apk
+          name: nova-drift-apk
           path: build/app/outputs/flutter-apk/app-release.apk
-
-      - name: Upload split APKs
-        uses: actions/upload-artifact@v4
-        with:
-          name: nova-drift-split-apks
-          path: |
-            build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
-            build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
-            build/app/outputs/flutter-apk/app-x86_64-release.apk
 
   release:
     name: Attach APK to GitHub Release
@@ -67,7 +58,7 @@ jobs:
       - name: Download APK artifact
         uses: actions/download-artifact@v4
         with:
-          name: nova-drift-universal-apk
+          name: nova-drift-apk
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
