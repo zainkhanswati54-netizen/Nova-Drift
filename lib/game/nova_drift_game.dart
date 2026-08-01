@@ -2,7 +2,7 @@ import 'dart:math';
 
 import 'package:flame/components.dart';
 import 'package:flame/game.dart';
-import 'package:flame/gestures.dart';
+import 'package:flame/events.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
@@ -15,7 +15,7 @@ import '../core/game_state.dart';
 /// on touch. Reach the flag at the end of the level to win.
 enum RunPhase { intro, playing, dead, complete }
 
-class NovaDriftGame extends FlameGame with TapDetector {
+class NovaDriftGame extends FlameGame with TapCallbacks {
   NovaDriftGame({required this.mode});
 
   /// e.g. "Classic - World 1".
@@ -137,16 +137,16 @@ class NovaDriftGame extends FlameGame with TapDetector {
   }
 
   @override
-  void onTapDown(TapDownInfo info) {
+  void onTapDown(TapDownEvent event) {
     holding = true;
     if (phase == RunPhase.intro) start();
   }
 
   @override
-  void onTapUp(TapUpInfo info) => holding = false;
+  void onTapUp(TapUpEvent event) => holding = false;
 
   @override
-  void onTapCancel() => holding = false;
+  void onTapCancel(TapCancelEvent event) => holding = false;
 
   @override
   void onRemove() {
