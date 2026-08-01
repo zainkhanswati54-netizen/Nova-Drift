@@ -29,6 +29,14 @@ class GameState extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> setWorld1Progress(int value) async {
+    if (value <= world1Progress) return;
+    world1Progress = value;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_kWorld1, value);
+  }
+
   Future<void> addGems(int amount) async {
     gems += amount;
     notifyListeners();
