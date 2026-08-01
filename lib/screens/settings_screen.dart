@@ -10,26 +10,35 @@ import '../widgets/mini_switch.dart';
 import '../widgets/settings_option_button.dart';
 import '../widgets/starfield_background.dart';
 
-/// "SETTINGS" screen - orange theme, matching the reference mockup.
-/// Sound + language are live and persisted; restore purchases / privacy /
-/// terms currently surface a styled "coming soon" (no store or legal
-/// pages wired up yet), but the whole screen animates in and every
-/// control has its own tap/hover feedback.
+/// Dialogs everywhere in the game share this fixed dark navy, regardless
+/// of the current cycling palette - keeps popups readable/consistent
+/// (same colour coming_soon_dialog.dart uses).
+const _kDialogColor = Color(0xFF13315C);
+
+/// "SETTINGS" screen. Same slow colour-cycling background as the main
+/// menu (blue -> red -> green -> orange) instead of a single fixed
+/// theme, so it feels like part of the same game rather than a
+/// different screen bolted on.
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
-
-  static const palette = GamePalettes.orange;
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
 }
 
 class _SettingsScreenState extends State<SettingsScreen>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   late final AnimationController _enter = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 700),
   )..forward();
+
+  // Same 80s full-cycle speed as ModeSelectScreen, so the palette stays
+  // in sync with wherever it was when SETTINGS was opened.
+  late final AnimationController _cycle = AnimationController(
+    vsync: this,
+    duration: const Duration(seconds: 80),
+  )..repeat();
 
   Animation<double> _rowAnim(int index) {
     final double start = 0.12 * index;
@@ -43,7 +52,16 @@ class _SettingsScreenState extends State<SettingsScreen>
   @override
   void dispose() {
     _enter.dispose();
+    _cycle.dispose();
     super.dispose();
+  }
+
+  GamePalette _paletteAt(double t) {
+    final palettes = GamePalettes.cycle;
+    final scaled = t * palettes.length;
+    final index = scaled.floor() % palettes.length;
+    final next = (index + 1) % palettes.length;
+    return GamePalette.lerp(palettes[index], palettes[next], scaled - scaled.floor());
   }
 
   Widget _staggered({required int index, required Widget child}) {
@@ -65,144 +83,150 @@ class _SettingsScreenState extends State<SettingsScreen>
 
   @override
   Widget build(BuildContext context) {
-    final palette = SettingsScreen.palette;
-
-    return Scaffold(
-      backgroundColor: palette.background,
-      body: Stack(
-        children: [
-          const Positioned.fill(child: StarfieldBackground()),
-          SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Column(
-                children: [
-                  // Top bar: back, cart, title, gems
-                  Row(
+    return AnimatedBuilder(
+      animation: _cycle,
+      builder: (context, _) {
+        final palette = _paletteAt(_cycle.value);
+        return Scaffold(
+          backgroundColor: palette.background,
+          body: Stack(
+            children: [
+              const Positioned.fill(child: StarfieldBackground()),
+              SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
                     children: [
-                      GameButton(
-                        width: 56,
-                        icon: Icons.arrow_back,
-                        onPressed: () => Navigator.of(context).pop(),
-                      ),
-                      const SizedBox(width: 10),
-                      GameButton(
-                        width: 56,
-                        icon: Icons.shopping_cart_outlined,
-                        onPressed: () => showComingSoon(context, 'Shop'),
+                      // Top bar: back, cart, title, gems
+                      Row(
+                        children: [
+                          GameButton(
+                            width: 56,
+                            icon: Icons.arrow_back,
+                            onPressed: () => Navigator.of(context).pop(),
+                          ),
+                          const SizedBox(width: 10),
+                          GameButton(
+                            width: 56,
+                            icon: Icons.shopping_cart_outlined,
+                            onPressed: () => showComingSoon(context, 'Shop'),
+                          ),
+                          Expanded(
+                            child: Center(
+                              child: Text('SETTINGS', style: AppText.title()),
+                            ),
+                          ),
+                          const GemCounter(),
+                        ],
                       ),
                       Expanded(
                         child: Center(
-                          child: Text('SETTINGS', style: AppText.title()),
-                        ),
-                      ),
-                      const GemCounter(),
-                    ],
-                  ),
-                  Expanded(
-                    child: Center(
-                      child: ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 460),
-                        child: SingleChildScrollView(
-                          child: Column(
-                            children: [
-                              const SizedBox(height: 12),
-                              _staggered(
-                                index: 0,
-                                child: Row(
-                                  children: [
-                                    Expanded(
-                                      child: ListenableBuilder(
-                                        listenable: GameState.instance,
-                                        builder: (context, _) {
-                                          final on = GameState.instance.soundOn;
-                                          return SettingsOptionButton(
-                                            leading: Icon(on
-                                                ? Icons.volume_up
-                                                : Icons.volume_off),
-                                            label: 'Sound',
-                                            active: true,
-                                            trailing:
-                                                MiniSwitch(value: on, onColor: palette.onCard),
-                                            onTap: () => GameState.instance
-                                                .setSoundOn(!on),
-                                          );
-                                        },
-                                      ),
+                          child: ConstrainedBox(
+                            constraints: const BoxConstraints(maxWidth: 460),
+                            child: SingleChildScrollView(
+                              child: Column(
+                                children: [
+                                  const SizedBox(height: 12),
+                                  _staggered(
+                                    index: 0,
+                                    child: Row(
+                                      children: [
+                                        Expanded(
+                                          child: ListenableBuilder(
+                                            listenable: GameState.instance,
+                                            builder: (context, _) {
+                                              final on = GameState.instance.soundOn;
+                                              return SettingsOptionButton(
+                                                leading: Icon(on
+                                                    ? Icons.volume_up
+                                                    : Icons.volume_off),
+                                                label: 'Sound',
+                                                active: true,
+                                                trailing: MiniSwitch(
+                                                    value: on, onColor: palette.onCard),
+                                                onTap: () => GameState.instance
+                                                    .setSoundOn(!on),
+                                              );
+                                            },
+                                          ),
+                                        ),
+                                        const SizedBox(width: 12),
+                                        Expanded(
+                                          child: ListenableBuilder(
+                                            listenable: GameState.instance,
+                                            builder: (context, _) {
+                                              return SettingsOptionButton(
+                                                leading: const Icon(Icons.language),
+                                                label: GameState.instance.language,
+                                                active: true,
+                                                trailing: const Icon(
+                                                    Icons.expand_more,
+                                                    color: Colors.black45,
+                                                    size: 20),
+                                                onTap: () =>
+                                                    _showLanguagePicker(context),
+                                              );
+                                            },
+                                          ),
+                                        ),
+                                      ],
                                     ),
-                                    const SizedBox(width: 12),
-                                    Expanded(
-                                      child: ListenableBuilder(
-                                        listenable: GameState.instance,
-                                        builder: (context, _) {
-                                          return SettingsOptionButton(
-                                            leading: const Icon(Icons.language),
-                                            label: GameState.instance.language,
-                                            active: true,
-                                            trailing: const Icon(
-                                                Icons.expand_more,
-                                                color: Colors.black45,
-                                                size: 20),
-                                            onTap: () =>
-                                                _showLanguagePicker(context, palette),
-                                          );
-                                        },
-                                      ),
+                                  ),
+                                  const SizedBox(height: 14),
+                                  _staggered(
+                                    index: 1,
+                                    child: SettingsOptionButton(
+                                      leading: const Icon(Icons.restore),
+                                      label: 'Restore Purchases',
+                                      active: false,
+                                      borderColor: Colors.white,
+                                      onTap: () => _restorePurchases(context),
                                     ),
-                                  ],
-                                ),
+                                  ),
+                                  const SizedBox(height: 28),
+                                  _staggered(
+                                    index: 3,
+                                    child: Row(
+                                      children: [
+                                        Expanded(
+                                          child: SettingsOptionButton(
+                                            leading: const Icon(
+                                                Icons.privacy_tip_outlined),
+                                            label: 'Privacy Policy',
+                                            active: false,
+                                            onTap: () => showComingSoon(
+                                                context, 'Privacy Policy'),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 12),
+                                        Expanded(
+                                          child: SettingsOptionButton(
+                                            leading: const Icon(
+                                                Icons.description_outlined),
+                                            label: 'Terms of Service',
+                                            active: false,
+                                            onTap: () => showComingSoon(
+                                                context, 'Terms of Service'),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  const SizedBox(height: 12),
+                                ],
                               ),
-                              const SizedBox(height: 14),
-                              _staggered(
-                                index: 1,
-                                child: SettingsOptionButton(
-                                  leading: const Icon(Icons.restore),
-                                  label: 'Restore Purchases',
-                                  active: false,
-                                  borderColor: Colors.white,
-                                  onTap: () => _restorePurchases(context),
-                                ),
-                              ),
-                              const SizedBox(height: 28),
-                              _staggered(
-                                index: 3,
-                                child: Row(
-                                  children: [
-                                    Expanded(
-                                      child: SettingsOptionButton(
-                                        leading: const Icon(Icons.privacy_tip_outlined),
-                                        label: 'Privacy Policy',
-                                        active: false,
-                                        onTap: () => showComingSoon(
-                                            context, 'Privacy Policy'),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 12),
-                                    Expanded(
-                                      child: SettingsOptionButton(
-                                        leading: const Icon(Icons.description_outlined),
-                                        label: 'Terms of Service',
-                                        active: false,
-                                        onTap: () => showComingSoon(
-                                            context, 'Terms of Service'),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              const SizedBox(height: 12),
-                            ],
+                            ),
                           ),
                         ),
                       ),
-                    ),
+                    ],
                   ),
-                ],
+                ),
               ),
-            ),
+            ],
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 
@@ -223,7 +247,7 @@ class _SettingsScreenState extends State<SettingsScreen>
             width: 300,
             padding: const EdgeInsets.all(24),
             decoration: BoxDecoration(
-              color: const Color(0xFF6E3E12),
+              color: _kDialogColor,
               borderRadius: BorderRadius.circular(6),
               border: Border.all(color: Colors.white, width: 2.5),
             ),
@@ -252,7 +276,7 @@ class _SettingsScreenState extends State<SettingsScreen>
     );
   }
 
-  void _showLanguagePicker(BuildContext context, GamePalette palette) {
+  void _showLanguagePicker(BuildContext context) {
     const languages = ['English', 'Urdu', 'Arabic', 'Spanish', 'Hindi'];
     showGeneralDialog<void>(
       context: context,
@@ -273,7 +297,7 @@ class _SettingsScreenState extends State<SettingsScreen>
                   width: 260,
                   padding: const EdgeInsets.symmetric(vertical: 12),
                   decoration: BoxDecoration(
-                    color: const Color(0xFF6E3E12),
+                    color: _kDialogColor,
                     borderRadius: BorderRadius.circular(6),
                     border: Border.all(color: Colors.white, width: 2.5),
                   ),

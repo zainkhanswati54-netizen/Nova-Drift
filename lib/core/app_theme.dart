@@ -37,44 +37,45 @@ class GamePalette {
   }
 }
 
-/// Palettes matched to the reference screenshots.
+/// Palettes matched to the reference screenshots, deepened for a
+/// richer "space" feel (the original pastel tones read as washed out).
 class GamePalettes {
   GamePalettes._();
 
   /// Blue theme (first screenshot).
   static const blue = GamePalette(
-    background: Color(0xFF2F6FC2),
-    card: Color(0xFF9CC9F0),
-    onCard: Color(0xFF1E4372),
+    background: Color(0xFF0F2C5C),
+    card: Color(0xFF3E7FD1),
+    onCard: Color(0xFF071A38),
     buttonFill: Color(0xFFFFFFFF),
-    onButtonFill: Color(0xFF1E4372),
+    onButtonFill: Color(0xFF071A38),
   );
 
   /// Red theme (last screenshot).
   static const red = GamePalette(
-    background: Color(0xFFC22F2F),
-    card: Color(0xFFF0A2A2),
-    onCard: Color(0xFF6E1B1B),
+    background: Color(0xFF6E1414),
+    card: Color(0xFFD64B4B),
+    onCard: Color(0xFF3C0808),
     buttonFill: Color(0xFFFFFFFF),
-    onButtonFill: Color(0xFF6E1B1B),
+    onButtonFill: Color(0xFF3C0808),
   );
 
   /// Green theme (level-select screenshot).
   static const green = GamePalette(
-    background: Color(0xFF1C8A66),
-    card: Color(0xFF8FEFC8),
-    onCard: Color(0xFF0E4A36),
+    background: Color(0xFF0B5C40),
+    card: Color(0xFF3BC98F),
+    onCard: Color(0xFF052E20),
     buttonFill: Color(0xFFFFFFFF),
-    onButtonFill: Color(0xFF0E4A36),
+    onButtonFill: Color(0xFF052E20),
   );
 
   /// Extra palette so the slow cycle feels alive.
   static const orange = GamePalette(
-    background: Color(0xFFC2702F),
-    card: Color(0xFFF0C89C),
-    onCard: Color(0xFF6E3E12),
+    background: Color(0xFF7A3A0F),
+    card: Color(0xFFE0863E),
+    onCard: Color(0xFF3E1D08),
     buttonFill: Color(0xFFFFFFFF),
-    onButtonFill: Color(0xFF6E3E12),
+    onButtonFill: Color(0xFF3E1D08),
   );
 
   /// Cycle order used by the mode-select screen.
