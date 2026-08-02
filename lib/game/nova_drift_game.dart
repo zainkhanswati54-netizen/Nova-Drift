@@ -22,6 +22,14 @@ enum RunPhase { intro, tutorial, playing, dead, complete }
 /// anywhere to continue" prompts.
 enum TutorialStep { tapSeveralTimes, holdFor, clickToContinue, finished }
 
+/// Which of the three mode-select cards started this run. Previously
+/// `mode` was stored but never actually read anywhere, so Classic,
+/// Endless and Race all played the identical fixed level - Endless
+/// wasn't endless and Race had nothing to race against. This is
+/// derived from the label GameplayScreen is given (see
+/// mode_select_screen.dart's `_startGame` calls).
+enum GameMode { classic, endless, race }
+
 class NovaDriftGame extends FlameGame with TapCallbacks {
   NovaDriftGame({required this.mode});
 
@@ -59,16 +67,63 @@ class NovaDriftGame extends FlameGame with TapCallbacks {
   double _tutorialHoldTimer = 0;
 
   /// 0-100, drives the HUD readout and the "you reached X%" message.
+  /// Classic/Race only - Endless has no fixed length, see [metersNotifier].
   final ValueNotifier<int> percent = ValueNotifier<int>(0);
+
+  /// Endless-only: live distance in metres, and whether the current run
+  /// has beaten the stored best (checked once, on death).
+  final ValueNotifier<int> metersNotifier = ValueNotifier<int>(0);
+  final ValueNotifier<bool> newBest = ValueNotifier<bool>(false);
+
+  /// Gems picked up so far this run (Classic/Race/Endless all have a
+  /// few scattered along the track now).
+  final ValueNotifier<int> gemsCollected = ValueNotifier<int>(0);
+
+  /// Race-only: null while undecided, true if the player crossed the
+  /// finish first, false if the rival did.
+  final ValueNotifier<bool?> raceWon = ValueNotifier<bool?>(null);
 
   double distance = 0;
   bool holding = false;
+
+  /// Race-only: how far the AI rival has travelled.
+  double aiDistance = 0;
 
   double shipScreenX = 140;
   double topY = 100;
   double bottomY = 500;
 
   final List<Offset> trail = [];
+
+  /// Derived from the label passed in from mode_select_screen.dart, e.g.
+  /// "Classic - World 1", "Endless", "Race - HARD".
+  GameMode get gameMode {
+    if (mode.startsWith('Endless')) return GameMode.endless;
+    if (mode.startsWith('Race')) return GameMode.race;
+    return GameMode.classic;
+  }
+
+  /// How fast the rival ship travels relative to the player, based on
+  /// the difficulty picked on the Race card.
+  double get _raceAiSpeedMultiplier {
+    if (mode.contains('HARD')) return 1.12;
+    if (mode.contains('EASY')) return 0.86;
+    return 1.0;
+  }
+
+  /// Endless speed ramps up the further the player gets, capped so it
+  /// never becomes literally unplayable.
+  double get _effectiveScrollSpeed {
+    if (gameMode != GameMode.endless) return scrollSpeed;
+    final extra = (distance * 0.018).clamp(0.0, scrollSpeed * 1.3);
+    return scrollSpeed + extra;
+  }
+
+  // --- Endless procedural generation state ---
+  double _endlessNextSpawnX = 480;
+  bool _endlessFromFloor = true;
+  final Random _endlessRand = Random();
+  List<_Collectible> _collectibles = [];
 
   // Built/created eagerly (not `late`) so these can never be "missing" -
   // no LateInitializationError window, even if onLoad is ever delayed,
@@ -142,10 +197,19 @@ class NovaDriftGame extends FlameGame with TapCallbacks {
     // still wrapped so a bad edit here degrades to an empty (but still
     // playable/visible) level instead of ever blanking the screen.
     try {
-      _obstacles = _buildLevel();
+      if (gameMode == GameMode.endless) {
+        // Endless grows its own obstacles/gems as the player advances -
+        // see _growEndlessLevel(), called every frame from update().
+        _obstacles = [];
+        _collectibles = [];
+      } else {
+        _obstacles = _buildLevel();
+        _collectibles = _buildClassicCollectibles(_obstacles);
+      }
     } catch (e, st) {
       debugPrint('NovaDriftGame._buildLevel failed: $e\n$st');
       _obstacles = const [];
+      _collectibles = const [];
     }
 
     overlays.add('intro');
@@ -171,12 +235,27 @@ class NovaDriftGame extends FlameGame with TapCallbacks {
     }
     if (phase != RunPhase.playing) return;
 
-    distance += scrollSpeed * dt;
+    distance += _effectiveScrollSpeed * dt;
     trail.add(Offset(distance, _ship.position.y));
     if (trail.length > 320) trail.removeAt(0);
 
-    final pct = ((distance / levelLength) * 100).clamp(0, 100).round();
-    if (pct != percent.value) percent.value = pct;
+    if (gameMode == GameMode.endless) {
+      final meters = (distance / 10).floor();
+      if (meters != metersNotifier.value) metersNotifier.value = meters;
+      _growEndlessLevel();
+    } else {
+      final pct = ((distance / levelLength) * 100).clamp(0, 100).round();
+      if (pct != percent.value) percent.value = pct;
+    }
+
+    if (gameMode == GameMode.race) {
+      aiDistance += scrollSpeed * _raceAiSpeedMultiplier * dt;
+      if (raceWon.value == null && aiDistance >= levelLength) {
+        raceWon.value = false; // rival crossed the line first
+        _completeLevel();
+        return;
+      }
+    }
 
     final shipCenter = Offset(shipScreenX, _ship.position.y);
     for (final o in _obstacles) {
@@ -188,9 +267,95 @@ class NovaDriftGame extends FlameGame with TapCallbacks {
       }
     }
 
-    if (distance >= levelLength) {
+    _checkCollectibles(shipCenter);
+
+    if (gameMode != GameMode.endless && distance >= levelLength) {
+      if (gameMode == GameMode.race) raceWon.value = true;
       _completeLevel();
     }
+  }
+
+  /// Generates obstacles/gems just ahead of the camera and forgets the
+  /// ones that have scrolled well behind it, so Endless never runs out
+  /// of level and never grows its lists without bound.
+  void _growEndlessLevel() {
+    final ahead = distance + size.x + 400;
+    while (_endlessNextSpawnX < ahead) {
+      _spawnEndlessObstacle();
+    }
+    if (_obstacles.length > 60) {
+      _obstacles.removeWhere((o) => o.worldX < distance - 300);
+    }
+    if (_collectibles.length > 40) {
+      _collectibles.removeWhere((c) => c.worldX < distance - 300);
+    }
+  }
+
+  void _spawnEndlessObstacle() {
+    // Spacing tightens the further the player has gone (harder over
+    // time), but never below a still-fair minimum gap.
+    final tightness = (distance / 45).clamp(0.0, 150.0);
+    final spacing = (300 - tightness) + _endlessRand.nextInt(60);
+    final sizeFraction =
+        (0.28 + distance / 22000).clamp(0.28, 0.46).toDouble();
+    _endlessFromFloor = !_endlessFromFloor;
+    final isBlock = _endlessRand.nextInt(4) == 0;
+
+    _obstacles.add(
+      isBlock
+          ? (_endlessFromFloor
+              ? _LevelObstacle.floorBlock(_endlessNextSpawnX,
+                  sizeFraction: sizeFraction)
+              : _LevelObstacle.ceilingBlock(_endlessNextSpawnX,
+                  sizeFraction: sizeFraction))
+          : (_endlessFromFloor
+              ? _LevelObstacle.floorSpike(_endlessNextSpawnX,
+                  sizeFraction: sizeFraction)
+              : _LevelObstacle.ceilingSpike(_endlessNextSpawnX,
+                  sizeFraction: sizeFraction)),
+    );
+
+    if (_endlessRand.nextInt(3) == 0) {
+      _collectibles
+          .add(_Collectible(worldX: _endlessNextSpawnX + spacing / 2));
+    }
+
+    _endlessNextSpawnX += spacing;
+  }
+
+  void _checkCollectibles(Offset shipCenter) {
+    for (final c in _collectibles) {
+      if (c.collected) continue;
+      final screenX = c.worldX - distance + shipScreenX;
+      if (screenX < -60 || screenX > size.x + 60) continue;
+      final cy = topY + (bottomY - topY) * c.yFraction;
+      final dx = shipCenter.dx - screenX;
+      final dy = shipCenter.dy - cy;
+      final pickupRadius = shipHitRadius + 10;
+      if (dx * dx + dy * dy <= pickupRadius * pickupRadius) {
+        c.collected = true;
+        gemsCollected.value += 1;
+        GameState.instance.addGems(1);
+      }
+    }
+  }
+
+  /// A handful of gems tucked into the gaps between the fixed level's
+  /// obstacles, purely a nice-to-have pickup - doesn't affect
+  /// difficulty or completion.
+  List<_Collectible> _buildClassicCollectibles(
+    List<_LevelObstacle> obstacles,
+  ) {
+    final gems = <_Collectible>[];
+    final sorted = [...obstacles]..sort((a, b) => a.worldX.compareTo(b.worldX));
+    for (var i = 0; i < sorted.length - 1; i++) {
+      final gap = sorted[i + 1].worldX - sorted[i].worldX;
+      if (gap > 160 && i % 2 == 0) {
+        final gapMid = (sorted[i].worldX + sorted[i + 1].worldX) / 2;
+        gems.add(_Collectible(worldX: gapMid));
+      }
+    }
+    return gems;
   }
 
   /// Drives the practice loop: the trail/ship keep animating exactly
@@ -284,12 +449,37 @@ class NovaDriftGame extends FlameGame with TapCallbacks {
     _ship.reset();
     overlays.remove('dead');
     overlays.remove('complete');
+
+    if (gameMode == GameMode.endless) {
+      metersNotifier.value = 0;
+      newBest.value = false;
+      gemsCollected.value = 0;
+      _obstacles = [];
+      _collectibles = [];
+      _endlessNextSpawnX = 480;
+      _endlessFromFloor = true;
+    } else {
+      gemsCollected.value = 0;
+      for (final c in _collectibles) {
+        c.collected = false;
+      }
+    }
+    if (gameMode == GameMode.race) {
+      aiDistance = 0;
+      raceWon.value = null;
+    }
+
     phase = RunPhase.playing;
   }
 
   void _die() {
     phase = RunPhase.dead;
     holding = false;
+    if (gameMode == GameMode.endless) {
+      GameState.instance.reportEndlessDistance(distance.round()).then((won) {
+        newBest.value = won;
+      });
+    }
     overlays.add('dead');
   }
 
@@ -297,6 +487,9 @@ class NovaDriftGame extends FlameGame with TapCallbacks {
     phase = RunPhase.complete;
     holding = false;
     overlays.add('complete');
+    // A lost race gets no reward - only a genuine finish (Classic,
+    // Race win) banks progress/gems.
+    if (gameMode == GameMode.race && raceWon.value == false) return;
     _saveProgress();
   }
 
@@ -335,6 +528,10 @@ class NovaDriftGame extends FlameGame with TapCallbacks {
     phaseNotifier.dispose();
     tutorialStep.dispose();
     tutorialCounter.dispose();
+    metersNotifier.dispose();
+    newBest.dispose();
+    gemsCollected.dispose();
+    raceWon.dispose();
     super.onRemove();
   }
 
@@ -535,11 +732,55 @@ class _Track extends Component with HasGameReference<NovaDriftGame> {
       o.draw(canvas, screenX, topY, bottomY);
     }
 
+    for (final c in game._collectibles) {
+      if (c.collected) continue;
+      final screenX = c.worldX - game.distance + game.shipScreenX;
+      if (screenX < -40 || screenX > w + 40) continue;
+      final cy = topY + (bottomY - topY) * c.yFraction;
+      _drawGem(canvas, screenX, cy);
+    }
+
+    if (game.gameMode == GameMode.race) {
+      final aiScreenX = game.aiDistance - game.distance + game.shipScreenX;
+      if (aiScreenX > -30 && aiScreenX < w + 30) {
+        _drawRival(canvas, aiScreenX, (topY + bottomY) / 2);
+      }
+    }
+
+    // Endless has no fixed finish line - it ends only on death.
+    if (game.gameMode == GameMode.endless) return;
+
     final finishX =
         NovaDriftGame.levelLength - game.distance + game.shipScreenX;
     if (finishX > -60 && finishX < w + 60) {
       _drawFinish(canvas, finishX, topY, bottomY);
     }
+  }
+
+  void _drawGem(Canvas canvas, double x, double y) {
+    final fill = Paint()..color = const Color(0xFFFFD54A);
+    final stroke = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5;
+    final path = Path()
+      ..moveTo(x, y - 8)
+      ..lineTo(x + 7, y)
+      ..lineTo(x, y + 8)
+      ..lineTo(x - 7, y)
+      ..close();
+    canvas.drawPath(path, fill);
+    canvas.drawPath(path, stroke);
+  }
+
+  void _drawRival(Canvas canvas, double x, double y) {
+    final fill = Paint()..color = Colors.white.withValues(alpha: 0.55);
+    final path = Path()
+      ..moveTo(x - 8, y - 7)
+      ..lineTo(x + 10, y)
+      ..lineTo(x - 8, y + 7)
+      ..close();
+    canvas.drawPath(path, fill);
   }
 
   void _drawFinish(Canvas canvas, double x, double top, double bottom) {
@@ -560,6 +801,20 @@ class _Track extends Component with HasGameReference<NovaDriftGame> {
       ..close();
     canvas.drawPath(flag, flagPaint);
   }
+}
+
+/// A small pickup gem scattered along the track. Purely a bonus - it
+/// doesn't affect difficulty or completion, just feeds the existing
+/// gems economy (shop/offers on the mode-select screen).
+class _Collectible {
+  _Collectible({required this.worldX, double? yFraction})
+      : yFraction = yFraction ?? (0.35 + Random().nextDouble() * 0.3);
+
+  final double worldX;
+
+  /// 0-1 fraction of the way from topY to bottomY.
+  final double yFraction;
+  bool collected = false;
 }
 
 /// One obstacle: a spike (triangle) or block (rectangle) anchored to

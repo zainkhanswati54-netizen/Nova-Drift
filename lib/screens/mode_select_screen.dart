@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../core/app_text.dart';
 import '../core/app_theme.dart';
+import '../core/game_state.dart';
 import '../widgets/coming_soon_dialog.dart';
 import '../widgets/game_button.dart';
 import '../widgets/gem_counter.dart';
@@ -128,7 +129,13 @@ class _ModeSelectScreenState extends State<ModeSelectScreen>
               palette: palette,
               title: 'ENDLESS',
               description: 'go as far as possible\nand set a highscore',
-              middle: Text('0m', style: AppText.big(palette.onCard)),
+              middle: AnimatedBuilder(
+                animation: GameState.instance,
+                builder: (context, _) => Text(
+                  '${GameState.instance.endlessBest}m',
+                  style: AppText.big(palette.onCard),
+                ),
+              ),
               actions: [
                 GameButton(
                   filled: true,

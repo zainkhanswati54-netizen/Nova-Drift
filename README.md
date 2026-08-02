@@ -13,7 +13,8 @@ Built with **Flutter** (menus) + **Flame** (gameplay engine, coming soon).
 | Settings (sound toggle, language, restore purchases, privacy/terms) | Done - animated screen, orange theme |
 | Shop / Offer / Gift / No-Ads / Skin | Coming Soon dialogs |
 | App icon (launcher + adaptive) | Done - generated via `flutter_launcher_icons` in CI |
-| Gameplay (Flame) | Coming Soon - engine wired with scrolling starfield placeholder |
+| Gameplay (Flame) | Done - Classic (fixed level), Endless (procedural, ramping speed, saved best distance), Race (AI rival, win/lose) all now behave differently. Gem pickups scattered on every mode. |
+| Visible error screen instead of a silent blank/blue screen on a widget crash | Done |
 
 ## How to run (Android)
 

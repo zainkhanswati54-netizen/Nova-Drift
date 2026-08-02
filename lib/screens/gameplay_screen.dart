@@ -64,23 +64,7 @@ class _GameplayScreenState extends State<GameplayScreen> {
                         onPressed: () => Navigator.of(context).pop(),
                       ),
                       const Spacer(),
-                      ValueListenableBuilder<int>(
-                        valueListenable: _game.percent,
-                        builder: (context, value, _) => Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 14,
-                            vertical: 8,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.black.withValues(alpha: 0.35),
-                            borderRadius: BorderRadius.circular(4),
-                            border:
-                                Border.all(color: Colors.white24, width: 2),
-                          ),
-                          child: Text('$value%',
-                              style: AppText.button(Colors.white)),
-                        ),
-                      ),
+                      _ProgressChip(game: _game),
                     ],
                   ),
                 ),
@@ -89,6 +73,37 @@ class _GameplayScreenState extends State<GameplayScreen> {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// The little top-right pill in the HUD: live distance for Endless
+/// (there's no "100%" to reach), live level percent otherwise.
+class _ProgressChip extends StatelessWidget {
+  const _ProgressChip({required this.game});
+
+  final NovaDriftGame game;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.35),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: Colors.white24, width: 2),
+      ),
+      child: game.gameMode == GameMode.endless
+          ? ValueListenableBuilder<int>(
+              valueListenable: game.metersNotifier,
+              builder: (context, value, _) =>
+                  Text('${value}m', style: AppText.button(Colors.white)),
+            )
+          : ValueListenableBuilder<int>(
+              valueListenable: game.percent,
+              builder: (context, value, _) =>
+                  Text('$value%', style: AppText.button(Colors.white)),
+            ),
     );
   }
 }
@@ -116,12 +131,12 @@ class _IntroOverlay extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(
-                'WORLD 1 - LEVEL 1',
+                _titleFor(game),
                 style: AppText.cardTitle(GamePalettes.green.onCard),
               ),
               const SizedBox(height: 10),
               Text(
-                'TAP AND HOLD TO FLY UP\nRELEASE TO FALL\nAVOID SPIKES & WALLS',
+                _instructionsFor(game),
                 textAlign: TextAlign.center,
                 style: AppText.body(GamePalettes.green.onCard),
               ),
@@ -138,6 +153,29 @@ class _IntroOverlay extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  String _titleFor(NovaDriftGame game) {
+    switch (game.gameMode) {
+      case GameMode.endless:
+        return 'ENDLESS DRIFT';
+      case GameMode.race:
+        return 'RACE - ${game.mode.split(' - ').last}';
+      case GameMode.classic:
+        return 'WORLD 1 - LEVEL 1';
+    }
+  }
+
+  String _instructionsFor(NovaDriftGame game) {
+    const base = 'TAP AND HOLD TO FLY UP\nRELEASE TO FALL';
+    switch (game.gameMode) {
+      case GameMode.endless:
+        return '$base\nCOLLECT GEMS - GO AS FAR AS YOU CAN';
+      case GameMode.race:
+        return '$base\nBEAT THE RIVAL SHIP TO THE FLAG';
+      case GameMode.classic:
+        return '$base\nAVOID SPIKES & WALLS';
+    }
   }
 }
 
@@ -278,13 +316,34 @@ class _DeadOverlay extends StatelessWidget {
             children: [
               Text('CRASHED', style: AppText.cardTitle(Colors.white)),
               const SizedBox(height: 4),
-              ValueListenableBuilder<int>(
-                valueListenable: game.percent,
-                builder: (context, value, _) => Text(
-                  'you reached $value%',
-                  style: AppText.body(Colors.white),
+              if (game.gameMode == GameMode.endless) ...[
+                ValueListenableBuilder<int>(
+                  valueListenable: game.metersNotifier,
+                  builder: (context, value, _) => Text(
+                    'you drifted ${value}m',
+                    style: AppText.body(Colors.white),
+                  ),
                 ),
-              ),
+                ValueListenableBuilder<bool>(
+                  valueListenable: game.newBest,
+                  builder: (context, isNew, _) => isNew
+                      ? Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Text(
+                            'NEW BEST!',
+                            style: AppText.body(GamePalettes.green.card),
+                          ),
+                        )
+                      : const SizedBox.shrink(),
+                ),
+              ] else
+                ValueListenableBuilder<int>(
+                  valueListenable: game.percent,
+                  builder: (context, value, _) => Text(
+                    'you reached $value%',
+                    style: AppText.body(Colors.white),
+                  ),
+                ),
               const SizedBox(height: 16),
               Row(
                 children: [
@@ -335,12 +394,31 @@ class _CompleteOverlay extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(
-                'LEVEL COMPLETE!',
-                style: AppText.cardTitle(GamePalettes.green.onCard),
+              ValueListenableBuilder<bool?>(
+                valueListenable: game.raceWon,
+                builder: (context, won, _) {
+                  final isRace = game.gameMode == GameMode.race;
+                  final title = isRace
+                      ? (won == false
+                          ? 'RIVAL WON THE RACE'
+                          : 'YOU WON THE RACE!')
+                      : 'LEVEL COMPLETE!';
+                  return Text(title,
+                      style: AppText.cardTitle(GamePalettes.green.onCard));
+                },
               ),
               const SizedBox(height: 6),
-              Text('+15 gems', style: AppText.body(GamePalettes.green.onCard)),
+              ValueListenableBuilder<bool?>(
+                valueListenable: game.raceWon,
+                builder: (context, won, _) {
+                  final lostRace =
+                      game.gameMode == GameMode.race && won == false;
+                  return Text(
+                    lostRace ? 'no reward - try again' : '+15 gems',
+                    style: AppText.body(GamePalettes.green.onCard),
+                  );
+                },
+              ),
               const SizedBox(height: 16),
               Row(
                 children: [
