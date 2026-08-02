@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../core/app_text.dart';
 import '../core/app_theme.dart';
+import '../core/debug_log.dart';
 import '../core/game_state.dart';
 import '../widgets/coming_soon_dialog.dart';
 import '../widgets/game_button.dart';
@@ -207,6 +208,7 @@ class _ModeSelectScreenState extends State<ModeSelectScreen>
   }
 
   void _startGame(String mode) {
+    DebugLog.instance.add('Mode select: starting "$mode".');
     Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => GameplayScreen(mode: mode)),
     );

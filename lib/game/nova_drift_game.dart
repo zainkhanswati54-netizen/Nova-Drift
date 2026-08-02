@@ -5,6 +5,7 @@ import 'package:flame/events.dart';
 import 'package:flame/game.dart';
 import 'package:flutter/material.dart';
 
+import '../core/debug_log.dart';
 import '../core/game_state.dart';
 
 /// Level 1 "wave rider" gameplay - same core loop as Space Waves:
@@ -209,11 +210,13 @@ class NovaDriftGame extends FlameGame with TapCallbacks {
 
   @override
   Future<void> onLoad() async {
+    DebugLog.instance.add('NovaDriftGame.onLoad start (mode=$mode).');
     // _ship already exists (created at field-declaration time above), so
     // it always gets added even if level generation below has a problem.
     add(_ScrollingStars());
     add(_Track());
     add(_ship);
+    DebugLog.instance.add('Stars/track/ship components added.');
 
     // Building the obstacle layout is pure math with no I/O, but it's
     // still wrapped so a bad edit here degrades to an empty (but still
@@ -231,14 +234,20 @@ class NovaDriftGame extends FlameGame with TapCallbacks {
         _collectibles = _buildClassicCollectibles(_obstacles);
         _powerUps = _buildClassicPowerUps();
       }
+      DebugLog.instance.add(
+        'Level built: ${_obstacles.length} obstacles, '
+        '${_collectibles.length} gems, ${_powerUps.length} power-ups.',
+      );
     } catch (e, st) {
       debugPrint('NovaDriftGame._buildLevel failed: $e\n$st');
+      DebugLog.instance.add('ERROR (_buildLevel): $e');
       _obstacles = const [];
       _collectibles = const [];
       _powerUps = const [];
     }
 
     overlays.add('intro');
+    DebugLog.instance.add("onLoad done, 'intro' overlay added.");
   }
 
   @override
@@ -249,6 +258,13 @@ class NovaDriftGame extends FlameGame with TapCallbacks {
     bottomY = size.y * 0.90;
     // Safe unconditionally now - _ship is created eagerly, never late.
     _ship.position.x = shipScreenX;
+    if (size.x <= 0 || size.y <= 0) {
+      // A zero-size canvas draws nothing but the background colour -
+      // exactly what a "blue screen with no UI" looks like. If this
+      // line ever shows up in the debug log, the fix is on the layout
+      // side (e.g. orientation/AspectRatio), not in the game logic.
+      DebugLog.instance.add('WARNING: onGameResize got zero size: $size');
+    }
   }
 
   @override
@@ -285,6 +301,7 @@ class NovaDriftGame extends FlameGame with TapCallbacks {
         // the procedural generator degrades to "no new hazards spawn
         // this frame" instead of ever crashing and blanking the screen.
         debugPrint('NovaDriftGame._growEndlessLevel failed: $e\n$st');
+        DebugLog.instance.add('ERROR (_growEndlessLevel): $e');
       }
     } else {
       final pct = ((distance / levelLength) * 100).clamp(0, 100).round();
