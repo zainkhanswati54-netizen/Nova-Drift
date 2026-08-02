@@ -9,14 +9,6 @@ import 'core/game_state.dart';
 import 'screens/mode_select_screen.dart';
 import 'widgets/debug_overlay.dart';
 
-/// Replaces Flutter's default error box with something that's actually
-/// visible against the game's dark backgrounds, and also logs it to
-/// [DebugLog] so it shows up in the on-screen debug console (tap the
-/// 🐞 button in the corner) - no PC or adb needed to see it. Without
-/// this, a widget that throws during build can render as a
-/// near-invisible grey box in release mode, which is exactly what a
-/// "blank blue screen" bug report usually turns out to be - something
-/// *did* fail, it just wasn't shown anywhere reachable.
 void _installVisibleErrorScreen() {
   ErrorWidget.builder = (FlutterErrorDetails details) {
     DebugLog.instance.add('ERROR (widget build): ${details.exceptionAsString()}');
@@ -56,9 +48,6 @@ void _installVisibleErrorScreen() {
 }
 
 Future<void> main() async {
-  // Wrapped so any error that would otherwise be swallowed silently in a
-  // release build (leaving the player on a blank screen with no clue why)
-  // gets logged to DebugLog - readable on-device - instead.
   runZonedGuarded(() async {
     WidgetsFlutterBinding.ensureInitialized();
     _installVisibleErrorScreen();
@@ -69,7 +58,6 @@ Future<void> main() async {
       DebugLog.instance.add('ERROR (Flutter): ${details.exceptionAsString()}');
     };
 
-    // Landscape-only, fullscreen - like the reference game.
     await SystemChrome.setPreferredOrientations([
       DeviceOrientation.landscapeLeft,
       DeviceOrientation.landscapeRight,
@@ -97,9 +85,6 @@ class NovaDriftApp extends StatelessWidget {
       title: 'Nova Drift',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(useMaterial3: true),
-      // The debug overlay rides on top of every screen (menus AND
-      // gameplay) via this builder, so the 🐞 log button is always
-      // reachable - including on whatever screen ends up blue.
       builder: (context, child) => Stack(
         children: [
           if (child != null) child,
