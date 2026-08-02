@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+<<<<<<< HEAD
 /// Centralised typography. The game uses one bold rounded family
 /// everywhere, always uppercase, matching the reference screenshots.
 ///
@@ -11,6 +12,8 @@ import 'package:flutter/material.dart';
 /// [FontWeight] uses the platform's built-in font (San Francisco on iOS,
 /// Roboto on Android), which already ships with every weight we need -
 /// no assets, no network, no missing-font exceptions, ever.
+=======
+>>>>>>> 0966e4e7f8d15a8eebe5dd1e5d86f1833db0c0aa
 class AppText {
   AppText._();
 
