@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 import 'core/debug_log.dart';
 import 'core/game_state.dart';
@@ -63,6 +64,17 @@ Future<void> main() async {
     WidgetsFlutterBinding.ensureInitialized();
     _installVisibleErrorScreen();
     DebugLog.instance.add('App starting…');
+
+    // The "Rubik" font used everywhere (see AppText) used to be fetched
+    // over the network from fonts.gstatic.com the first time it was
+    // needed. On a device/emulator with no internet access (or where
+    // Google's font CDN is blocked), that fetch fails on *every* text
+    // rebuild, flooding the log with
+    // "Failed host lookup: 'fonts.gstatic.com'" errors forever.
+    // Disabling runtime fetching stops those network calls completely;
+    // if the font isn't bundled locally it now just falls back to the
+    // platform's default font instead of throwing.
+    GoogleFonts.config.allowRuntimeFetching = false;
 
     FlutterError.onError = (details) {
       FlutterError.presentError(details);
