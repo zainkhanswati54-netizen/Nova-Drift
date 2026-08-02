@@ -1,8 +1,8 @@
 import 'dart:math';
 
 import 'package:flame/components.dart';
-import 'package:flame/game.dart';
 import 'package:flame/events.dart';
+import 'package:flame/game.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
@@ -13,7 +13,15 @@ import '../core/game_state.dart';
 /// climb at 45 degrees, releasing makes it dive at 45 degrees. Floor
 /// and ceiling are flat and safe to slide on; spikes and blocks kill
 /// on touch. Reach the flag at the end of the level to win.
-enum RunPhase { intro, playing, dead, complete }
+///
+/// `intro` -> `tutorial` (safe practice, no obstacles) -> `playing`
+/// -> `dead` / `complete`.
+enum RunPhase { intro, tutorial, playing, dead, complete }
+
+/// The three guided steps shown during the tutorial, matching the
+/// reference game's "press several times" / "hold for" / "click
+/// anywhere to continue" prompts.
+enum TutorialStep { tapSeveralTimes, holdFor, clickToContinue, finished }
 
 class NovaDriftGame extends FlameGame with TapCallbacks {
   NovaDriftGame({required this.mode});
@@ -26,7 +34,30 @@ class NovaDriftGame extends FlameGame with TapCallbacks {
   static const double verticalSpeed = 230; // px / second (45 degree wave)
   static const Color accent = Color(0xFF3BC98F);
 
-  RunPhase phase = RunPhase.intro;
+  // Zone colours the background lerps through as the level plays out -
+  // pink "warm-up", purple "moderate zig-zag", blue "narrow corridor" -
+  // matching the phases in the level design brief.
+  static const Color _zonePink = Color(0xFF9A0F66);
+  static const Color _zonePurple = Color(0xFF4B22C9);
+  static const Color _zoneBlue = Color(0xFF1560C4);
+  static const double _phase1End = 0.30;
+
+  // Tutorial-only background colours, matching the reference screenshots.
+  static const Color _tutorialPurple = Color(0xFF4B22C9);
+  static const Color _tutorialBlue = Color(0xFF1560C4);
+
+  static const int tutorialTapsNeeded = 4;
+  static const double tutorialHoldSeconds = 0.9;
+
+  final ValueNotifier<RunPhase> phaseNotifier = ValueNotifier(RunPhase.intro);
+  RunPhase get phase => phaseNotifier.value;
+  set phase(RunPhase value) => phaseNotifier.value = value;
+
+  final ValueNotifier<TutorialStep> tutorialStep =
+      ValueNotifier(TutorialStep.tapSeveralTimes);
+  final ValueNotifier<int> tutorialCounter =
+      ValueNotifier(tutorialTapsNeeded);
+  double _tutorialHoldTimer = 0;
 
   /// 0-100, drives the HUD readout and the "you reached X%" message.
   final ValueNotifier<int> percent = ValueNotifier<int>(0);
@@ -46,8 +77,54 @@ class NovaDriftGame extends FlameGame with TapCallbacks {
 
   double get shipHitRadius => 9;
 
+  /// Trail colour changes with the tutorial step so it visually matches
+  /// the reference screenshots (white -> light blue -> pink), settling
+  /// back to the game's accent colour for real gameplay.
+  Color get trailColor {
+    if (phase == RunPhase.tutorial) {
+      switch (tutorialStep.value) {
+        case TutorialStep.tapSeveralTimes:
+          return Colors.white;
+        case TutorialStep.holdFor:
+          return const Color(0xFF8FD9FF);
+        case TutorialStep.clickToContinue:
+          return const Color(0xFFFF6FD8);
+        case TutorialStep.finished:
+          return accent;
+      }
+    }
+    return accent;
+  }
+
   @override
-  Color backgroundColor() => const Color(0xFF13315C);
+  Color backgroundColor() {
+    switch (phase) {
+      case RunPhase.intro:
+        return const Color(0xFF13315C);
+      case RunPhase.tutorial:
+        return tutorialStep.value == TutorialStep.clickToContinue
+            ? _tutorialBlue
+            : _tutorialPurple;
+      case RunPhase.playing:
+      case RunPhase.dead:
+      case RunPhase.complete:
+        return _zoneColor(distance);
+    }
+  }
+
+  /// Pink (warm-up) -> purple (moderate) -> blue (narrow corridor),
+  /// lerped smoothly against how far through the level the ship is.
+  Color _zoneColor(double d) {
+    final t = (d / levelLength).clamp(0.0, 1.0);
+    if (t <= _phase1End) {
+      return Color.lerp(_zonePink, _zonePurple, t / _phase1End)!;
+    }
+    return Color.lerp(
+      _zonePurple,
+      _zoneBlue,
+      (t - _phase1End) / (1 - _phase1End),
+    )!;
+  }
 
   @override
   Future<void> onLoad() async {
@@ -76,6 +153,11 @@ class NovaDriftGame extends FlameGame with TapCallbacks {
   @override
   void update(double dt) {
     super.update(dt);
+
+    if (phase == RunPhase.tutorial) {
+      _updateTutorial(dt);
+      return;
+    }
     if (phase != RunPhase.playing) return;
 
     distance += scrollSpeed * dt;
@@ -100,10 +182,87 @@ class NovaDriftGame extends FlameGame with TapCallbacks {
     }
   }
 
+  /// Drives the practice loop: the trail/ship keep animating exactly
+  /// like real gameplay (so the zig-zag / climb / glide draw
+  /// themselves live) but there are no obstacles and nothing to lose.
+  void _updateTutorial(double dt) {
+    distance += scrollSpeed * dt;
+    trail.add(Offset(distance, ship.position.y));
+    if (trail.length > 320) trail.removeAt(0);
+
+    if (tutorialStep.value == TutorialStep.holdFor) {
+      if (holding) {
+        _tutorialHoldTimer += dt;
+        if (_tutorialHoldTimer >= tutorialHoldSeconds) {
+          _advanceTutorialStep();
+        }
+      } else {
+        _tutorialHoldTimer = 0;
+      }
+    }
+  }
+
   void start() {
     if (phase != RunPhase.intro) return;
-    phase = RunPhase.playing;
+    phase = RunPhase.tutorial;
+    tutorialStep.value = TutorialStep.tapSeveralTimes;
+    tutorialCounter.value = tutorialTapsNeeded;
+    _tutorialHoldTimer = 0;
+    distance = 0;
+    trail.clear();
+    ship.reset();
     overlays.remove('intro');
+    overlays.add('tutorial');
+  }
+
+  /// Lets the player jump straight into the real level.
+  void skipTutorial() {
+    if (phase != RunPhase.tutorial) return;
+    _finishTutorial();
+  }
+
+  void _handleTutorialTap() {
+    switch (tutorialStep.value) {
+      case TutorialStep.tapSeveralTimes:
+        tutorialCounter.value =
+            (tutorialCounter.value - 1).clamp(0, tutorialTapsNeeded);
+        if (tutorialCounter.value == 0) _advanceTutorialStep();
+        break;
+      case TutorialStep.clickToContinue:
+        _advanceTutorialStep();
+        break;
+      case TutorialStep.holdFor:
+      case TutorialStep.finished:
+        break;
+    }
+  }
+
+  void _advanceTutorialStep() {
+    switch (tutorialStep.value) {
+      case TutorialStep.tapSeveralTimes:
+        tutorialStep.value = TutorialStep.holdFor;
+        tutorialCounter.value = 1;
+        _tutorialHoldTimer = 0;
+        break;
+      case TutorialStep.holdFor:
+        tutorialStep.value = TutorialStep.clickToContinue;
+        break;
+      case TutorialStep.clickToContinue:
+        _finishTutorial();
+        break;
+      case TutorialStep.finished:
+        break;
+    }
+  }
+
+  void _finishTutorial() {
+    tutorialStep.value = TutorialStep.finished;
+    overlays.remove('tutorial');
+    distance = 0;
+    trail.clear();
+    holding = false;
+    ship.reset();
+    phase = RunPhase.playing;
   }
 
   void restart() {
@@ -139,7 +298,18 @@ class NovaDriftGame extends FlameGame with TapCallbacks {
   @override
   void onTapDown(TapDownEvent event) {
     holding = true;
-    if (phase == RunPhase.intro) start();
+    switch (phase) {
+      case RunPhase.intro:
+        start();
+        break;
+      case RunPhase.tutorial:
+        _handleTutorialTap();
+        break;
+      case RunPhase.playing:
+      case RunPhase.dead:
+      case RunPhase.complete:
+        break;
+    }
   }
 
   @override
@@ -151,29 +321,92 @@ class NovaDriftGame extends FlameGame with TapCallbacks {
   @override
   void onRemove() {
     percent.dispose();
+    phaseNotifier.dispose();
+    tutorialStep.dispose();
+    tutorialCounter.dispose();
     super.onRemove();
   }
 
-  /// World 1 - Level 1: gentle floor/ceiling spikes first, then a couple
-  /// of blocks that need a real climb or dive, a short zig-zag, and a
-  /// narrow gate right before the finish flag.
-  List<_LevelObstacle> _buildLevel() => [
-        _LevelObstacle.floorSpike(520),
-        _LevelObstacle.ceilingSpike(920),
-        _LevelObstacle.floorSpike(1280),
-        _LevelObstacle.floorBlock(1680, sizeFraction: 0.46),
-        _LevelObstacle.ceilingBlock(2100, sizeFraction: 0.46),
-        _LevelObstacle.floorSpike(2450),
-        _LevelObstacle.ceilingSpike(2650),
-        _LevelObstacle.floorBlock(3050, sizeFraction: 0.30, width: 40),
-        _LevelObstacle.ceilingBlock(3050, sizeFraction: 0.30, width: 40),
-        _LevelObstacle.floorSpike(3450),
-      ];
+  /// World 1 - Level 1, built in the same three phases described in
+  /// the design brief:
+  ///  - Warm-up (0-30%): wide open gaps, single spikes, long holds.
+  ///  - Moderate zig-zag (30-70%): tighter spacing plus a few blocks
+  ///    that need a real full climb or dive.
+  ///  - Narrow corridor (70-100%): small, frequent spikes that call
+  ///    for quick micro-taps, ending in a tight gate before the flag.
+  List<_LevelObstacle> _buildLevel() {
+    final obstacles = <_LevelObstacle>[];
+    final rand = Random(7); // seeded so the layout is reproducible
+
+    final phase1End = levelLength * 0.30;
+    final phase2End = levelLength * 0.70;
+    final phase3End = levelLength - 260;
+
+    double x = 480;
+    bool fromFloor = true;
+
+    // Phase 1: warm-up - wide gaps, one spike at a time.
+    while (x < phase1End) {
+      obstacles.add(
+        fromFloor
+            ? _LevelObstacle.floorSpike(x)
+            : _LevelObstacle.ceilingSpike(x),
+      );
+      fromFloor = !fromFloor;
+      x += 320 + rand.nextInt(60);
+    }
+
+    // Phase 2: moderate zig-zag - closer spikes, occasional blocks
+    // that force a full climb or dive rather than a quick tap.
+    int i = 0;
+    while (x < phase2End) {
+      if (i % 3 == 2) {
+        obstacles.add(
+          fromFloor
+              ? _LevelObstacle.floorBlock(x, sizeFraction: 0.42)
+              : _LevelObstacle.ceilingBlock(x, sizeFraction: 0.42),
+        );
+      } else {
+        obstacles.add(
+          fromFloor
+              ? _LevelObstacle.floorSpike(x)
+              : _LevelObstacle.ceilingSpike(x),
+        );
+      }
+      fromFloor = !fromFloor;
+      x += 220 + rand.nextInt(50);
+      i++;
+    }
+
+    // Phase 3: narrow corridor - small, frequent spikes, micro-tap
+    // territory, right up to a tight gate before the finish flag.
+    while (x < phase3End) {
+      obstacles.add(
+        fromFloor
+            ? _LevelObstacle.floorSpike(x, width: 26, sizeFraction: 0.26)
+            : _LevelObstacle.ceilingSpike(x, width: 26, sizeFraction: 0.26),
+      );
+      fromFloor = !fromFloor;
+      x += 140 + rand.nextInt(30);
+    }
+
+    obstacles.add(
+      _LevelObstacle.floorBlock(levelLength - 170,
+          sizeFraction: 0.32, width: 40),
+    );
+    obstacles.add(
+      _LevelObstacle.ceilingBlock(levelLength - 170,
+          sizeFraction: 0.32, width: 40),
+    );
+
+    return obstacles;
+  }
 }
 
 /// The player's arrow. Pinned to a fixed screen X; the level scrolls
 /// underneath it. Holding = climb at 45 degrees, releasing = dive at
-/// 45 degrees - identical feel to the reference game's tutorial.
+/// 45 degrees - identical feel to the reference game's tutorial. Also
+/// active (unharmed) during the practice tutorial.
 class _Ship extends PositionComponent with HasGameReference<NovaDriftGame> {
   _Ship() : super(size: Vector2.all(20), anchor: Anchor.center);
 
@@ -194,7 +427,9 @@ class _Ship extends PositionComponent with HasGameReference<NovaDriftGame> {
   void update(double dt) {
     super.update(dt);
     position.x = game.shipScreenX;
-    if (game.phase != RunPhase.playing) return;
+    if (game.phase != RunPhase.playing && game.phase != RunPhase.tutorial) {
+      return;
+    }
 
     final dir = game.holding ? -1.0 : 1.0;
     position.y += dir * NovaDriftGame.verticalSpeed * dt;
@@ -228,6 +463,8 @@ class _Ship extends PositionComponent with HasGameReference<NovaDriftGame> {
 /// obstacle currently on screen, and the finish flag. Everything here
 /// is pure "camera space" - X positions are recomputed every frame
 /// from `worldX - distance`, so nothing needs to move itself.
+/// Obstacles and the flag are hidden during `intro`/`tutorial` so the
+/// practice area is a clean, safe sandbox.
 class _Track extends Component with HasGameReference<NovaDriftGame> {
   @override
   void render(Canvas canvas) {
@@ -267,7 +504,7 @@ class _Track extends Component with HasGameReference<NovaDriftGame> {
         ..strokeCap = StrokeCap.round
         ..strokeJoin = StrokeJoin.round;
       final core = Paint()
-        ..color = NovaDriftGame.accent
+        ..color = game.trailColor
         ..style = PaintingStyle.stroke
         ..strokeWidth = 3
         ..strokeCap = StrokeCap.round
@@ -275,6 +512,11 @@ class _Track extends Component with HasGameReference<NovaDriftGame> {
       canvas.drawPath(path, glow);
       canvas.drawPath(path, core);
     }
+
+    final showLevel = game.phase == RunPhase.playing ||
+        game.phase == RunPhase.dead ||
+        game.phase == RunPhase.complete;
+    if (!showLevel) return;
 
     for (final o in game.obstacles) {
       final screenX = o.worldX - game.distance + game.shipScreenX;

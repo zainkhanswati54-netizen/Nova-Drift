@@ -33,6 +33,8 @@ class _GameplayScreenState extends State<GameplayScreen> {
               overlayBuilderMap: {
                 'intro': (context, game) =>
                     _IntroOverlay(game: game as NovaDriftGame),
+                'tutorial': (context, game) =>
+                    _TutorialOverlay(game: game as NovaDriftGame),
                 'dead': (context, game) =>
                     _DeadOverlay(game: game as NovaDriftGame),
                 'complete': (context, game) =>
@@ -41,36 +43,49 @@ class _GameplayScreenState extends State<GameplayScreen> {
               initialActiveOverlays: const ['intro'],
             ),
           ),
-          SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Row(
-                children: [
-                  GameButton(
-                    width: 56,
-                    icon: Icons.arrow_back,
-                    onPressed: () => Navigator.of(context).pop(),
-                  ),
-                  const Spacer(),
-                  ValueListenableBuilder<int>(
-                    valueListenable: _game.percent,
-                    builder: (context, value, _) => Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 14,
-                        vertical: 8,
+          // Back button + progress chip - hidden during intro/tutorial,
+          // which have their own dedicated top bars.
+          ValueListenableBuilder<RunPhase>(
+            valueListenable: _game.phaseNotifier,
+            builder: (context, phase, _) {
+              final showHud =
+                  phase == RunPhase.playing ||
+                  phase == RunPhase.dead ||
+                  phase == RunPhase.complete;
+              if (!showHud) return const SizedBox.shrink();
+              return SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Row(
+                    children: [
+                      GameButton(
+                        width: 56,
+                        icon: Icons.arrow_back,
+                        onPressed: () => Navigator.of(context).pop(),
                       ),
-                      decoration: BoxDecoration(
-                        color: Colors.black.withValues(alpha: 0.35),
-                        borderRadius: BorderRadius.circular(4),
-                        border: Border.all(color: Colors.white24, width: 2),
+                      const Spacer(),
+                      ValueListenableBuilder<int>(
+                        valueListenable: _game.percent,
+                        builder: (context, value, _) => Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 8,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.35),
+                            borderRadius: BorderRadius.circular(4),
+                            border:
+                                Border.all(color: Colors.white24, width: 2),
+                          ),
+                          child: Text('$value%',
+                              style: AppText.button(Colors.white)),
+                        ),
                       ),
-                      child:
-                          Text('$value%', style: AppText.button(Colors.white)),
-                    ),
+                    ],
                   ),
-                ],
-              ),
-            ),
+                ),
+              );
+            },
           ),
         ],
       ),
@@ -123,6 +138,119 @@ class _IntroOverlay extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+/// Interactive practice overlay shown before the real level starts.
+/// The player taps a few times to draw a zig-zag, then holds once to
+/// climb, then taps once more to jump into the real run - matching
+/// the reference game's tutorial flow. A skip button is always
+/// available for returning players.
+class _TutorialOverlay extends StatelessWidget {
+  const _TutorialOverlay({required this.game});
+
+  final NovaDriftGame game;
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned.fill(
+      child: SafeArea(
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+              child: Row(
+                children: [
+                  Container(
+                    width: 40,
+                    height: 32,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.4),
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(color: Colors.white24, width: 1.5),
+                    ),
+                    child: const Text('🇬🇧', style: TextStyle(fontSize: 16)),
+                  ),
+                  const Spacer(),
+                  GameButton(
+                    label: 'Skip tutorial',
+                    onPressed: game.skipTutorial,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+            Container(
+              margin: const EdgeInsets.symmetric(horizontal: 12),
+              padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.4),
+                borderRadius: BorderRadius.circular(4),
+                border: Border.all(color: Colors.white24, width: 1.5),
+              ),
+              alignment: Alignment.center,
+              child: Text(
+                'Tap and hold to fly up / slide on the ceiling',
+                textAlign: TextAlign.center,
+                style: AppText.body(Colors.white),
+              ),
+            ),
+            const Spacer(),
+            ValueListenableBuilder<TutorialStep>(
+              valueListenable: game.tutorialStep,
+              builder: (context, step, _) {
+                if (step == TutorialStep.finished) {
+                  return const SizedBox.shrink();
+                }
+                final showCounter = step == TutorialStep.tapSeveralTimes ||
+                    step == TutorialStep.holdFor;
+                return Container(
+                  margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.4),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  alignment: Alignment.center,
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(_promptFor(step), style: AppText.button(Colors.white)),
+                      if (showCounter) ...[
+                        const SizedBox(width: 8),
+                        const Icon(Icons.play_arrow,
+                            size: 14, color: Colors.white54),
+                        ValueListenableBuilder<int>(
+                          valueListenable: game.tutorialCounter,
+                          builder: (context, count, _) => Text(
+                            '$count',
+                            style: AppText.button(Colors.white70),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _promptFor(TutorialStep step) {
+    switch (step) {
+      case TutorialStep.tapSeveralTimes:
+        return 'press several times';
+      case TutorialStep.holdFor:
+        return 'hold for';
+      case TutorialStep.clickToContinue:
+        return 'click anywhere to continue';
+      case TutorialStep.finished:
+        return '';
+    }
   }
 }
 
