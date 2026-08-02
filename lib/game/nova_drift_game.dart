@@ -69,10 +69,15 @@ class NovaDriftGame extends FlameGame with TapCallbacks {
   double bottomY = 500;
 
   final List<Offset> trail = [];
-  late final List<_LevelObstacle> _obstacles;
-  late final _Ship _ship;
 
-  bool _ready = false;
+  // Built/created eagerly (not `late`) so these can never be "missing" -
+  // no LateInitializationError window, even if onLoad is ever delayed,
+  // re-entered, or something else throws around it. That was the root
+  // cause of the blank blue screen: onGameResize could run again (e.g.
+  // after immersive-sticky system UI settles) and touch `_ship` before
+  // it existed, which crashes silently in a release build.
+  List<_LevelObstacle> _obstacles = const [];
+  final _Ship _ship = _Ship();
 
   double get shipHitRadius => 9;
 
@@ -127,22 +132,23 @@ class NovaDriftGame extends FlameGame with TapCallbacks {
 
   @override
   Future<void> onLoad() async {
-    // Guaranteed to run even if something below throws, so a first-time
-    // player is never left staring at a blank background with no PLAY
-    // card and no way forward.
+    // _ship already exists (created at field-declaration time above), so
+    // it always gets added even if level generation below has a problem.
+    add(_ScrollingStars());
+    add(_Track());
+    add(_ship);
+
+    // Building the obstacle layout is pure math with no I/O, but it's
+    // still wrapped so a bad edit here degrades to an empty (but still
+    // playable/visible) level instead of ever blanking the screen.
     try {
       _obstacles = _buildLevel();
-      _ship = _Ship();
-
-      add(_ScrollingStars());
-      add(_Track());
-      add(_ship);
     } catch (e, st) {
-      debugPrint('NovaDriftGame.onLoad failed: $e\n$st');
-    } finally {
-      overlays.add('intro');
-      _ready = true;
+      debugPrint('NovaDriftGame._buildLevel failed: $e\n$st');
+      _obstacles = const [];
     }
+
+    overlays.add('intro');
   }
 
   @override
@@ -151,9 +157,8 @@ class NovaDriftGame extends FlameGame with TapCallbacks {
     shipScreenX = size.x * 0.26;
     topY = size.y * 0.16;
     bottomY = size.y * 0.90;
-    if (_ready) {
-      _ship.position.x = shipScreenX;
-    }
+    // Safe unconditionally now - _ship is created eagerly, never late.
+    _ship.position.x = shipScreenX;
   }
 
   @override
