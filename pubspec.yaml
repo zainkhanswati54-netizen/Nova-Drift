@@ -11,8 +11,6 @@ dependencies:
     sdk: flutter
   # Flame game engine - gameplay (Coming Soon) is built on this
   flame: ^1.18.0
-  # Google Fonts for the bold rounded game typography
-  google_fonts: ^6.2.1
   # Local persistence for gems / progress / settings
   shared_preferences: ^2.2.3
 
