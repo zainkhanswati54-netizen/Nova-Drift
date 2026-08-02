@@ -30,6 +30,32 @@ class _GameplayScreenState extends State<GameplayScreen> {
           Positioned.fill(
             child: GameWidget(
               game: _game,
+              // Previously a failure anywhere during load (or a widget
+              // exception while the game had no size yet) just left the
+              // player staring at the plain navy backgroundColor() with
+              // nothing on it - the "blue screen" bug. These two
+              // builders make sure there's always something on screen:
+              // a spinner while it's genuinely still loading, and the
+              // real error message (instead of nothing) if it fails.
+              loadingBuilder: (context) => const ColoredBox(
+                color: Color(0xFF13315C),
+                child: Center(
+                  child: CircularProgressIndicator(color: Colors.white70),
+                ),
+              ),
+              errorBuilder: (context, error) => ColoredBox(
+                color: const Color(0xFF3C0808),
+                child: Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(20),
+                    child: Text(
+                      'The game failed to load:\n$error',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: Colors.white),
+                    ),
+                  ),
+                ),
+              ),
               overlayBuilderMap: {
                 'intro': (context, game) =>
                     _IntroOverlay(game: game as NovaDriftGame),
@@ -63,6 +89,8 @@ class _GameplayScreenState extends State<GameplayScreen> {
                         icon: Icons.arrow_back,
                         onPressed: () => Navigator.of(context).pop(),
                       ),
+                      const SizedBox(width: 10),
+                      _PowerUpHud(game: _game),
                       const Spacer(),
                       _ProgressChip(game: _game),
                     ],
@@ -72,6 +100,77 @@ class _GameplayScreenState extends State<GameplayScreen> {
             },
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Small chips that appear next to the back button while a shield,
+/// magnet or slow-mo power-up is active, so the player always knows
+/// what's currently helping them.
+class _PowerUpHud extends StatelessWidget {
+  const _PowerUpHud({required this.game});
+
+  final NovaDriftGame game;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        ValueListenableBuilder<bool>(
+          valueListenable: game.shieldActive,
+          builder: (context, active, _) => _chip(
+            active,
+            Icons.shield,
+            const Color(0xFF6FE3FF),
+          ),
+        ),
+        ValueListenableBuilder<double>(
+          valueListenable: game.magnetTimer,
+          builder: (context, seconds, _) => _chip(
+            seconds > 0,
+            Icons.attractions,
+            const Color(0xFFFF6FD8),
+            seconds: seconds,
+          ),
+        ),
+        ValueListenableBuilder<double>(
+          valueListenable: game.slowmoTimer,
+          builder: (context, seconds, _) => _chip(
+            seconds > 0,
+            Icons.hourglass_bottom,
+            const Color(0xFFBB8CFF),
+            seconds: seconds,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _chip(bool visible, IconData icon, Color color, {double? seconds}) {
+    if (!visible) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(right: 8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.4),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: color, width: 1.5),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 16, color: color),
+            if (seconds != null) ...[
+              const SizedBox(width: 4),
+              Text(
+                seconds.ceil().toString(),
+                style: AppText.small(Colors.white),
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }
@@ -168,13 +267,14 @@ class _IntroOverlay extends StatelessWidget {
 
   String _instructionsFor(NovaDriftGame game) {
     const base = 'TAP AND HOLD TO FLY UP\nRELEASE TO FALL';
+    const powerUps = 'GRAB SHIELD / MAGNET / SLOW-MO ORBS';
     switch (game.gameMode) {
       case GameMode.endless:
-        return '$base\nCOLLECT GEMS - GO AS FAR AS YOU CAN';
+        return '$base\nCOLLECT GEMS - GO AS FAR AS YOU CAN\n$powerUps';
       case GameMode.race:
-        return '$base\nBEAT THE RIVAL SHIP TO THE FLAG';
+        return '$base\nBEAT THE RIVAL SHIP TO THE FLAG\n$powerUps';
       case GameMode.classic:
-        return '$base\nAVOID SPIKES & WALLS';
+        return '$base\nAVOID SPIKES & WALLS\n$powerUps';
     }
   }
 }

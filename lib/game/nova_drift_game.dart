@@ -30,6 +30,13 @@ enum TutorialStep { tapSeveralTimes, holdFor, clickToContinue, finished }
 /// mode_select_screen.dart's `_startGame` calls).
 enum GameMode { classic, endless, race }
 
+/// Temporary boosts scattered along the track - a shield that absorbs
+/// one hit, a magnet that pulls gems in, and a slow-mo that eases the
+/// pace for a few seconds. This is the main thing that makes a run
+/// feel different from the plain "Space Waves" reference loop: pure
+/// reflex dodging is no longer the whole game.
+enum PowerUpType { shield, magnet, slowmo }
+
 class NovaDriftGame extends FlameGame with TapCallbacks {
   NovaDriftGame({required this.mode});
 
@@ -114,9 +121,10 @@ class NovaDriftGame extends FlameGame with TapCallbacks {
   /// Endless speed ramps up the further the player gets, capped so it
   /// never becomes literally unplayable.
   double get _effectiveScrollSpeed {
-    if (gameMode != GameMode.endless) return scrollSpeed;
+    final slowFactor = slowmoTimer.value > 0 ? 0.55 : 1.0;
+    if (gameMode != GameMode.endless) return scrollSpeed * slowFactor;
     final extra = (distance * 0.018).clamp(0.0, scrollSpeed * 1.3);
-    return scrollSpeed + extra;
+    return (scrollSpeed + extra) * slowFactor;
   }
 
   // --- Endless procedural generation state ---
@@ -133,6 +141,20 @@ class NovaDriftGame extends FlameGame with TapCallbacks {
   // it existed, which crashes silently in a release build.
   List<_LevelObstacle> _obstacles = const [];
   final _Ship _ship = _Ship();
+
+  // --- Power-up state (shield / magnet / slow-mo) ---
+  List<_PowerUp> _powerUps = [];
+  final ValueNotifier<bool> shieldActive = ValueNotifier<bool>(false);
+  final ValueNotifier<double> magnetTimer = ValueNotifier<double>(0);
+  final ValueNotifier<double> slowmoTimer = ValueNotifier<double>(0);
+
+  // --- Juice: little particle bursts on pickups, deaths and shield saves ---
+  final List<_Particle> _particles = [];
+
+  /// Real elapsed play time (resets each run). Drives the pulsing
+  /// "rhythm" hazards introduced below - a timing element the plain
+  /// reference game doesn't have.
+  double elapsed = 0;
 
   double get shipHitRadius => 9;
 
@@ -198,18 +220,22 @@ class NovaDriftGame extends FlameGame with TapCallbacks {
     // playable/visible) level instead of ever blanking the screen.
     try {
       if (gameMode == GameMode.endless) {
-        // Endless grows its own obstacles/gems as the player advances -
-        // see _growEndlessLevel(), called every frame from update().
+        // Endless grows its own obstacles/gems/power-ups as the player
+        // advances - see _growEndlessLevel(), called every frame from
+        // update().
         _obstacles = [];
         _collectibles = [];
+        _powerUps = [];
       } else {
         _obstacles = _buildLevel();
         _collectibles = _buildClassicCollectibles(_obstacles);
+        _powerUps = _buildClassicPowerUps();
       }
     } catch (e, st) {
       debugPrint('NovaDriftGame._buildLevel failed: $e\n$st');
       _obstacles = const [];
       _collectibles = const [];
+      _powerUps = const [];
     }
 
     overlays.add('intro');
@@ -229,11 +255,21 @@ class NovaDriftGame extends FlameGame with TapCallbacks {
   void update(double dt) {
     super.update(dt);
 
+    _updateParticles(dt);
+
     if (phase == RunPhase.tutorial) {
       _updateTutorial(dt);
       return;
     }
     if (phase != RunPhase.playing) return;
+
+    elapsed += dt;
+    if (magnetTimer.value > 0) {
+      magnetTimer.value = (magnetTimer.value - dt).clamp(0, 999);
+    }
+    if (slowmoTimer.value > 0) {
+      slowmoTimer.value = (slowmoTimer.value - dt).clamp(0, 999);
+    }
 
     distance += _effectiveScrollSpeed * dt;
     trail.add(Offset(distance, _ship.position.y));
@@ -242,7 +278,14 @@ class NovaDriftGame extends FlameGame with TapCallbacks {
     if (gameMode == GameMode.endless) {
       final meters = (distance / 10).floor();
       if (meters != metersNotifier.value) metersNotifier.value = meters;
-      _growEndlessLevel();
+      try {
+        _growEndlessLevel();
+      } catch (e, st) {
+        // Same defensive philosophy as _buildLevel below: a bad edit to
+        // the procedural generator degrades to "no new hazards spawn
+        // this frame" instead of ever crashing and blanking the screen.
+        debugPrint('NovaDriftGame._growEndlessLevel failed: $e\n$st');
+      }
     } else {
       final pct = ((distance / levelLength) * 100).clamp(0, 100).round();
       if (pct != percent.value) percent.value = pct;
@@ -261,13 +304,23 @@ class NovaDriftGame extends FlameGame with TapCallbacks {
     for (final o in _obstacles) {
       final screenX = o.worldX - distance + shipScreenX;
       if (screenX < -100 || screenX > size.x + 100) continue;
-      if (o.hits(shipCenter, shipHitRadius, screenX, topY, bottomY)) {
+      if (o.hits(shipCenter, shipHitRadius, screenX, topY, bottomY, elapsed)) {
+        if (shieldActive.value) {
+          // Shield absorbs one hit and blows the obstacle up instead
+          // of ending the run.
+          shieldActive.value = false;
+          _burst(shipCenter, const Color(0xFF6FE3FF), count: 22);
+          _obstacles.remove(o);
+          break;
+        }
+        _burst(shipCenter, accent, count: 26);
         _die();
         return;
       }
     }
 
     _checkCollectibles(shipCenter);
+    _checkPowerUps(shipCenter);
 
     if (gameMode != GameMode.endless && distance >= levelLength) {
       if (gameMode == GameMode.race) raceWon.value = true;
@@ -289,6 +342,9 @@ class NovaDriftGame extends FlameGame with TapCallbacks {
     if (_collectibles.length > 40) {
       _collectibles.removeWhere((c) => c.worldX < distance - 300);
     }
+    if (_powerUps.length > 20) {
+      _powerUps.removeWhere((p) => p.worldX < distance - 300);
+    }
   }
 
   void _spawnEndlessObstacle() {
@@ -300,6 +356,10 @@ class NovaDriftGame extends FlameGame with TapCallbacks {
         (0.28 + distance / 22000).clamp(0.28, 0.46).toDouble();
     _endlessFromFloor = !_endlessFromFloor;
     final isBlock = _endlessRand.nextInt(4) == 0;
+    // Past the early game, some spikes pulse in and out rhythmically -
+    // a timing element layered on top of pure positioning.
+    final pulsing =
+        !isBlock && distance > 1200 && _endlessRand.nextInt(3) == 0;
 
     _obstacles.add(
       isBlock
@@ -310,12 +370,20 @@ class NovaDriftGame extends FlameGame with TapCallbacks {
                   sizeFraction: sizeFraction))
           : (_endlessFromFloor
               ? _LevelObstacle.floorSpike(_endlessNextSpawnX,
-                  sizeFraction: sizeFraction)
+                  sizeFraction: sizeFraction, pulsing: pulsing)
               : _LevelObstacle.ceilingSpike(_endlessNextSpawnX,
-                  sizeFraction: sizeFraction)),
+                  sizeFraction: sizeFraction, pulsing: pulsing)),
     );
 
-    if (_endlessRand.nextInt(3) == 0) {
+    if (_endlessRand.nextInt(9) == 0) {
+      _powerUps.add(
+        _PowerUp(
+          worldX: _endlessNextSpawnX + spacing / 2,
+          type: PowerUpType
+              .values[_endlessRand.nextInt(PowerUpType.values.length)],
+        ),
+      );
+    } else if (_endlessRand.nextInt(3) == 0) {
       _collectibles
           .add(_Collectible(worldX: _endlessNextSpawnX + spacing / 2));
     }
@@ -324,6 +392,7 @@ class NovaDriftGame extends FlameGame with TapCallbacks {
   }
 
   void _checkCollectibles(Offset shipCenter) {
+    final magnetOn = magnetTimer.value > 0;
     for (final c in _collectibles) {
       if (c.collected) continue;
       final screenX = c.worldX - distance + shipScreenX;
@@ -332,12 +401,92 @@ class NovaDriftGame extends FlameGame with TapCallbacks {
       final dx = shipCenter.dx - screenX;
       final dy = shipCenter.dy - cy;
       final pickupRadius = shipHitRadius + 10;
-      if (dx * dx + dy * dy <= pickupRadius * pickupRadius) {
+      // With the magnet power-up active, any gem roughly ahead of the
+      // ship gets pulled in from much further away.
+      const magnetRadius = 130.0;
+      final inRange = dx * dx + dy * dy <= pickupRadius * pickupRadius ||
+          (magnetOn &&
+              screenX > shipCenter.dx - 20 &&
+              dx * dx + dy * dy <= magnetRadius * magnetRadius);
+      if (inRange) {
         c.collected = true;
         gemsCollected.value += 1;
         GameState.instance.addGems(1);
+        _burst(Offset(screenX, cy), const Color(0xFFFFD54A), count: 8);
       }
     }
+  }
+
+  void _checkPowerUps(Offset shipCenter) {
+    for (final p in _powerUps) {
+      if (p.collected) continue;
+      final screenX = p.worldX - distance + shipScreenX;
+      if (screenX < -60 || screenX > size.x + 60) continue;
+      final cy = topY + (bottomY - topY) * p.yFraction;
+      final dx = shipCenter.dx - screenX;
+      final dy = shipCenter.dy - cy;
+      final pickupRadius = shipHitRadius + 12;
+      if (dx * dx + dy * dy <= pickupRadius * pickupRadius) {
+        p.collected = true;
+        _burst(Offset(screenX, cy), _powerUpColor(p.type), count: 16);
+        switch (p.type) {
+          case PowerUpType.shield:
+            shieldActive.value = true;
+            break;
+          case PowerUpType.magnet:
+            magnetTimer.value = 8;
+            break;
+          case PowerUpType.slowmo:
+            slowmoTimer.value = 5;
+            break;
+        }
+      }
+    }
+  }
+
+  Color _powerUpColor(PowerUpType type) {
+    switch (type) {
+      case PowerUpType.shield:
+        return const Color(0xFF6FE3FF);
+      case PowerUpType.magnet:
+        return const Color(0xFFFF6FD8);
+      case PowerUpType.slowmo:
+        return const Color(0xFFBB8CFF);
+    }
+  }
+
+  /// A few hand-placed power-ups spread through the fixed Classic
+  /// level's three difficulty zones.
+  List<_PowerUp> _buildClassicPowerUps() {
+    return [
+      _PowerUp(worldX: levelLength * 0.22, type: PowerUpType.shield),
+      _PowerUp(worldX: levelLength * 0.52, type: PowerUpType.slowmo),
+      _PowerUp(worldX: levelLength * 0.80, type: PowerUpType.magnet),
+    ];
+  }
+
+  void _burst(Offset at, Color color, {int count = 14}) {
+    final rand = Random();
+    for (int i = 0; i < count; i++) {
+      final angle = rand.nextDouble() * 2 * pi;
+      final speed = 60 + rand.nextDouble() * 170;
+      _particles.add(
+        _Particle(
+          pos: at,
+          vel: Offset(cos(angle), sin(angle)) * speed,
+          color: color,
+        ),
+      );
+    }
+  }
+
+  void _updateParticles(double dt) {
+    for (final p in _particles) {
+      p.pos += p.vel * dt;
+      p.vel = Offset(p.vel.dx * 0.94, p.vel.dy * 0.94);
+      p.life -= dt;
+    }
+    _particles.removeWhere((p) => p.life <= 0);
   }
 
   /// A handful of gems tucked into the gaps between the fixed level's
@@ -450,18 +599,28 @@ class NovaDriftGame extends FlameGame with TapCallbacks {
     overlays.remove('dead');
     overlays.remove('complete');
 
+    elapsed = 0;
+    shieldActive.value = false;
+    magnetTimer.value = 0;
+    slowmoTimer.value = 0;
+    _particles.clear();
+
     if (gameMode == GameMode.endless) {
       metersNotifier.value = 0;
       newBest.value = false;
       gemsCollected.value = 0;
       _obstacles = [];
       _collectibles = [];
+      _powerUps = [];
       _endlessNextSpawnX = 480;
       _endlessFromFloor = true;
     } else {
       gemsCollected.value = 0;
       for (final c in _collectibles) {
         c.collected = false;
+      }
+      for (final p in _powerUps) {
+        p.collected = false;
       }
     }
     if (gameMode == GameMode.race) {
@@ -532,6 +691,9 @@ class NovaDriftGame extends FlameGame with TapCallbacks {
     newBest.dispose();
     gemsCollected.dispose();
     raceWon.dispose();
+    shieldActive.dispose();
+    magnetTimer.dispose();
+    slowmoTimer.dispose();
     super.onRemove();
   }
 
@@ -588,14 +750,21 @@ class NovaDriftGame extends FlameGame with TapCallbacks {
 
     // Phase 3: narrow corridor - small, frequent spikes, micro-tap
     // territory, right up to a tight gate before the finish flag.
+    // Every third spike also pulses in size, adding a rhythm-reading
+    // element on top of the pure positioning challenge.
+    int spikeIndex = 0;
     while (x < phase3End) {
+      final pulsing = spikeIndex % 3 == 2;
       obstacles.add(
         fromFloor
-            ? _LevelObstacle.floorSpike(x, width: 26, sizeFraction: 0.26)
-            : _LevelObstacle.ceilingSpike(x, width: 26, sizeFraction: 0.26),
+            ? _LevelObstacle.floorSpike(x,
+                width: 26, sizeFraction: 0.26, pulsing: pulsing)
+            : _LevelObstacle.ceilingSpike(x,
+                width: 26, sizeFraction: 0.26, pulsing: pulsing),
       );
       fromFloor = !fromFloor;
       x += 140 + rand.nextInt(30);
+      spikeIndex++;
     }
 
     obstacles.add(
@@ -729,7 +898,7 @@ class _Track extends Component with HasGameReference<NovaDriftGame> {
     for (final o in game._obstacles) {
       final screenX = o.worldX - game.distance + game.shipScreenX;
       if (screenX < -100 || screenX > w + 100) continue;
-      o.draw(canvas, screenX, topY, bottomY);
+      o.draw(canvas, screenX, topY, bottomY, game.elapsed);
     }
 
     for (final c in game._collectibles) {
@@ -738,6 +907,20 @@ class _Track extends Component with HasGameReference<NovaDriftGame> {
       if (screenX < -40 || screenX > w + 40) continue;
       final cy = topY + (bottomY - topY) * c.yFraction;
       _drawGem(canvas, screenX, cy);
+    }
+
+    for (final p in game._powerUps) {
+      if (p.collected) continue;
+      final screenX = p.worldX - game.distance + game.shipScreenX;
+      if (screenX < -40 || screenX > w + 40) continue;
+      final cy = topY + (bottomY - topY) * p.yFraction;
+      _drawPowerUp(canvas, screenX, cy, p.type);
+    }
+
+    for (final particle in game._particles) {
+      final t = (particle.life / particle.maxLife).clamp(0.0, 1.0);
+      final paint = Paint()..color = particle.color.withValues(alpha: t);
+      canvas.drawCircle(particle.pos, 2.5 * t + 0.5, paint);
     }
 
     if (game.gameMode == GameMode.race) {
@@ -771,6 +954,51 @@ class _Track extends Component with HasGameReference<NovaDriftGame> {
       ..close();
     canvas.drawPath(path, fill);
     canvas.drawPath(path, stroke);
+  }
+
+  void _drawPowerUp(Canvas canvas, double x, double y, PowerUpType type) {
+    final color = switch (type) {
+      PowerUpType.shield => const Color(0xFF6FE3FF),
+      PowerUpType.magnet => const Color(0xFFFF6FD8),
+      PowerUpType.slowmo => const Color(0xFFBB8CFF),
+    };
+    final ring = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.5;
+    final glow = Paint()..color = color.withValues(alpha: 0.25);
+    canvas.drawCircle(Offset(x, y), 13, glow);
+    canvas.drawCircle(Offset(x, y), 10, ring);
+
+    final iconPaint = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2
+      ..strokeCap = StrokeCap.round;
+    switch (type) {
+      case PowerUpType.shield:
+        final path = Path()
+          ..moveTo(x, y - 6)
+          ..lineTo(x + 5, y - 3)
+          ..lineTo(x + 5, y + 2)
+          ..lineTo(x, y + 6)
+          ..lineTo(x - 5, y + 2)
+          ..lineTo(x - 5, y - 3)
+          ..close();
+        canvas.drawPath(path, iconPaint);
+        break;
+      case PowerUpType.magnet:
+        canvas.drawArc(Rect.fromCircle(center: Offset(x, y), radius: 5),
+            0.3, 3.4, false, iconPaint);
+        canvas.drawLine(Offset(x - 5, y - 2), Offset(x - 5, y + 3), iconPaint);
+        canvas.drawLine(Offset(x + 5, y - 2), Offset(x + 5, y + 3), iconPaint);
+        break;
+      case PowerUpType.slowmo:
+        canvas.drawCircle(Offset(x, y), 5, iconPaint);
+        canvas.drawLine(Offset(x, y), Offset(x, y - 4), iconPaint);
+        canvas.drawLine(Offset(x, y), Offset(x + 3, y), iconPaint);
+        break;
+    }
   }
 
   void _drawRival(Canvas canvas, double x, double y) {
@@ -817,6 +1045,35 @@ class _Collectible {
   bool collected = false;
 }
 
+/// A shield / magnet / slow-mo pickup anchored at a fixed world X,
+/// same placement model as [_Collectible].
+class _PowerUp {
+  _PowerUp({required this.worldX, required this.type, double? yFraction})
+      : yFraction = yFraction ?? (0.3 + Random().nextDouble() * 0.4);
+
+  final double worldX;
+  final PowerUpType type;
+  final double yFraction;
+  bool collected = false;
+}
+
+/// A single fading dot in a burst - used for gem sparkles, shield
+/// saves and the death explosion. Purely cosmetic.
+class _Particle {
+  _Particle({
+    required this.pos,
+    required this.vel,
+    required this.color,
+    this.life = 0.55,
+  }) : maxLife = life;
+
+  Offset pos;
+  Offset vel;
+  final Color color;
+  double life;
+  final double maxLife;
+}
+
 /// One obstacle: a spike (triangle) or block (rectangle) anchored to
 /// either the floor or the ceiling. Sizes are expressed as a fraction
 /// of the playfield height so the level scales to any screen size.
@@ -827,12 +1084,14 @@ class _LevelObstacle {
     required this.fromFloor,
     required this.isSpike,
     required this.sizeFraction,
+    this.pulsing = false,
   });
 
   factory _LevelObstacle.floorSpike(
     double worldX, {
     double width = 34,
     double sizeFraction = 0.30,
+    bool pulsing = false,
   }) =>
       _LevelObstacle._(
         worldX: worldX,
@@ -840,12 +1099,14 @@ class _LevelObstacle {
         fromFloor: true,
         isSpike: true,
         sizeFraction: sizeFraction,
+        pulsing: pulsing,
       );
 
   factory _LevelObstacle.ceilingSpike(
     double worldX, {
     double width = 34,
     double sizeFraction = 0.30,
+    bool pulsing = false,
   }) =>
       _LevelObstacle._(
         worldX: worldX,
@@ -853,6 +1114,7 @@ class _LevelObstacle {
         fromFloor: false,
         isSpike: true,
         sizeFraction: sizeFraction,
+        pulsing: pulsing,
       );
 
   factory _LevelObstacle.floorBlock(
@@ -887,15 +1149,30 @@ class _LevelObstacle {
   final bool isSpike;
   final double sizeFraction;
 
+  /// Whether this obstacle rhythmically grows/shrinks over time - see
+  /// [_effectiveSizeFraction].
+  final bool pulsing;
+
+  /// The size actually used for hit-testing and drawing this frame.
+  /// Pulsing obstacles breathe between ~60% and 100% of their base
+  /// size on a sine wave, offset by worldX so neighbouring pulsing
+  /// spikes aren't perfectly in sync.
+  double _effectiveSizeFraction(double elapsedT) {
+    if (!pulsing) return sizeFraction;
+    final wave = 0.5 + 0.5 * sin(elapsedT * 3.4 + worldX * 0.02);
+    return sizeFraction * (0.6 + 0.4 * wave);
+  }
+
   bool hits(
     Offset shipCenter,
     double radius,
     double screenX,
     double topY,
-    double bottomY,
-  ) {
+    double bottomY, [
+    double elapsedT = 0,
+  ]) {
     final playH = bottomY - topY;
-    final h = playH * sizeFraction;
+    final h = playH * _effectiveSizeFraction(elapsedT);
     final left = screenX - width / 2;
     final right = screenX + width / 2;
 
@@ -927,15 +1204,21 @@ class _LevelObstacle {
     return _circleHitsRect(shipCenter, radius, rect);
   }
 
-  void draw(Canvas canvas, double screenX, double topY, double bottomY) {
+  void draw(
+    Canvas canvas,
+    double screenX,
+    double topY,
+    double bottomY, [
+    double elapsedT = 0,
+  ]) {
     final playH = bottomY - topY;
-    final h = playH * sizeFraction;
+    final h = playH * _effectiveSizeFraction(elapsedT);
     final left = screenX - width / 2;
     final right = screenX + width / 2;
 
-    final fill = Paint()..color = Colors.white;
+    final fill = Paint()..color = pulsing ? const Color(0xFFFFEFC2) : Colors.white;
     final stroke = Paint()
-      ..color = NovaDriftGame.accent
+      ..color = pulsing ? const Color(0xFFFF9C3B) : NovaDriftGame.accent
       ..style = PaintingStyle.stroke
       ..strokeWidth = 2.5;
 
