@@ -127,15 +127,22 @@ class NovaDriftGame extends FlameGame with TapCallbacks {
 
   @override
   Future<void> onLoad() async {
-    _obstacles = _buildLevel();
-    _ship = _Ship();
+    // Guaranteed to run even if something below throws, so a first-time
+    // player is never left staring at a blank background with no PLAY
+    // card and no way forward.
+    try {
+      _obstacles = _buildLevel();
+      _ship = _Ship();
 
-    add(_ScrollingStars());
-    add(_Track());
-    add(_ship);
-
-    overlays.add('intro');
-    _ready = true;
+      add(_ScrollingStars());
+      add(_Track());
+      add(_ship);
+    } catch (e, st) {
+      debugPrint('NovaDriftGame.onLoad failed: $e\n$st');
+    } finally {
+      overlays.add('intro');
+      _ready = true;
+    }
   }
 
   @override
