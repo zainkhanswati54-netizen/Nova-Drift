@@ -3,7 +3,6 @@ import 'dart:math';
 import 'package:flame/components.dart';
 import 'package:flame/events.dart';
 import 'package:flame/game.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../core/game_state.dart';
@@ -70,8 +69,8 @@ class NovaDriftGame extends FlameGame with TapCallbacks {
   double bottomY = 500;
 
   final List<Offset> trail = [];
-  late final List<_LevelObstacle> obstacles;
-  late final _Ship ship;
+  late final List<_LevelObstacle> _obstacles;
+  late final _Ship _ship;
 
   bool _ready = false;
 
@@ -128,12 +127,12 @@ class NovaDriftGame extends FlameGame with TapCallbacks {
 
   @override
   Future<void> onLoad() async {
-    obstacles = _buildLevel();
-    ship = _Ship();
+    _obstacles = _buildLevel();
+    _ship = _Ship();
 
     add(_ScrollingStars());
     add(_Track());
-    add(ship);
+    add(_ship);
 
     overlays.add('intro');
     _ready = true;
@@ -146,7 +145,7 @@ class NovaDriftGame extends FlameGame with TapCallbacks {
     topY = size.y * 0.16;
     bottomY = size.y * 0.90;
     if (_ready) {
-      ship.position.x = shipScreenX;
+      _ship.position.x = shipScreenX;
     }
   }
 
@@ -161,14 +160,14 @@ class NovaDriftGame extends FlameGame with TapCallbacks {
     if (phase != RunPhase.playing) return;
 
     distance += scrollSpeed * dt;
-    trail.add(Offset(distance, ship.position.y));
+    trail.add(Offset(distance, _ship.position.y));
     if (trail.length > 320) trail.removeAt(0);
 
     final pct = ((distance / levelLength) * 100).clamp(0, 100).round();
     if (pct != percent.value) percent.value = pct;
 
-    final shipCenter = Offset(shipScreenX, ship.position.y);
-    for (final o in obstacles) {
+    final shipCenter = Offset(shipScreenX, _ship.position.y);
+    for (final o in _obstacles) {
       final screenX = o.worldX - distance + shipScreenX;
       if (screenX < -100 || screenX > size.x + 100) continue;
       if (o.hits(shipCenter, shipHitRadius, screenX, topY, bottomY)) {
@@ -187,7 +186,7 @@ class NovaDriftGame extends FlameGame with TapCallbacks {
   /// themselves live) but there are no obstacles and nothing to lose.
   void _updateTutorial(double dt) {
     distance += scrollSpeed * dt;
-    trail.add(Offset(distance, ship.position.y));
+    trail.add(Offset(distance, _ship.position.y));
     if (trail.length > 320) trail.removeAt(0);
 
     if (tutorialStep.value == TutorialStep.holdFor) {
@@ -210,7 +209,7 @@ class NovaDriftGame extends FlameGame with TapCallbacks {
     _tutorialHoldTimer = 0;
     distance = 0;
     trail.clear();
-    ship.reset();
+    _ship.reset();
     overlays.remove('intro');
     overlays.add('tutorial');
   }
@@ -261,7 +260,7 @@ class NovaDriftGame extends FlameGame with TapCallbacks {
     distance = 0;
     trail.clear();
     holding = false;
-    ship.reset();
+    _ship.reset();
     phase = RunPhase.playing;
   }
 
@@ -270,7 +269,7 @@ class NovaDriftGame extends FlameGame with TapCallbacks {
     percent.value = 0;
     trail.clear();
     holding = false;
-    ship.reset();
+    _ship.reset();
     overlays.remove('dead');
     overlays.remove('complete');
     phase = RunPhase.playing;
@@ -338,9 +337,9 @@ class NovaDriftGame extends FlameGame with TapCallbacks {
     final obstacles = <_LevelObstacle>[];
     final rand = Random(7); // seeded so the layout is reproducible
 
-    final phase1End = levelLength * 0.30;
-    final phase2End = levelLength * 0.70;
-    final phase3End = levelLength - 260;
+    const phase1End = levelLength * 0.30;
+    const phase2End = levelLength * 0.70;
+    const phase3End = levelLength - 260;
 
     double x = 480;
     bool fromFloor = true;
@@ -518,7 +517,7 @@ class _Track extends Component with HasGameReference<NovaDriftGame> {
         game.phase == RunPhase.complete;
     if (!showLevel) return;
 
-    for (final o in game.obstacles) {
+    for (final o in game._obstacles) {
       final screenX = o.worldX - game.distance + game.shipScreenX;
       if (screenX < -100 || screenX > w + 100) continue;
       o.draw(canvas, screenX, topY, bottomY);
