@@ -39,7 +39,19 @@ enum GameMode { classic, endless, race }
 enum PowerUpType { shield, magnet, slowmo }
 
 class NovaDriftGame extends FlameGame with TapCallbacks {
-  NovaDriftGame({required this.mode});
+  NovaDriftGame({required this.mode}) {
+    // Flame auto-pauses the game loop (and, it turns out, the pending
+    // onLoad/onGameResize lifecycle processing along with it) whenever it
+    // sees the app go to AppLifecycleState.inactive/paused - see
+    // https://docs.flame-engine.org/latest/flame/game.html#backgrounding.
+    // This screen forces landscape + immersive fullscreen right as it
+    // appears, which can cause Android to briefly report the app as
+    // "inactive" during that system UI transition - a false trigger, not
+    // a real backgrounding. If that happens right as GameWidget attaches,
+    // the game can get stuck paused before onLoad ever runs, and never
+    // recovers even once the app is genuinely back in the foreground.
+    pauseWhenBackgrounded = false;
+  }
 
   /// e.g. "Classic - World 1".
   final String mode;

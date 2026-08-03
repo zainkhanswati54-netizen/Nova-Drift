@@ -10,6 +10,7 @@ import '../widgets/gem_counter.dart';
 import '../widgets/mode_card.dart';
 import '../widgets/starfield_background.dart';
 import 'gameplay_screen.dart';
+import 'flame_diagnostic_screen.dart';
 import 'level_select_screen.dart';
 import 'settings_screen.dart';
 
@@ -351,6 +352,19 @@ class _BottomBar extends StatelessWidget {
           label: 'SETTINGS',
           onPressed: () => Navigator.of(context).push(
             MaterialPageRoute(builder: (_) => const SettingsScreen()),
+          ),
+        ),
+        const SizedBox(width: 12),
+        // TEMPORARY diagnostic button - remove once the Flame loading
+        // freeze is confirmed fixed. Loads a completely bare, empty
+        // FlameGame with none of NovaDriftGame's code, to prove whether
+        // the freeze is caused by our game code or by Flame/the device.
+        GameButton(
+          width: 150,
+          icon: Icons.bug_report,
+          label: 'TEST FLAME',
+          onPressed: () => Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => const FlameDiagnosticScreen()),
           ),
         ),
       ],
