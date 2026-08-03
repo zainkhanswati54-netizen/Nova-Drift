@@ -250,9 +250,16 @@ class NovaDriftGame extends FlameGame with TapCallbacks {
     DebugLog.instance.add("onLoad done, 'intro' overlay added.");
   }
 
+  bool _firstResizeLogged = false;
+  bool _firstUpdateLogged = false;
+
   @override
   void onGameResize(Vector2 size) {
     super.onGameResize(size);
+    if (!_firstResizeLogged) {
+      _firstResizeLogged = true;
+      DebugLog.instance.add('NovaDriftGame.onGameResize first call: $size');
+    }
     shipScreenX = size.x * 0.26;
     topY = size.y * 0.16;
     bottomY = size.y * 0.90;
@@ -270,6 +277,10 @@ class NovaDriftGame extends FlameGame with TapCallbacks {
   @override
   void update(double dt) {
     super.update(dt);
+    if (!_firstUpdateLogged) {
+      _firstUpdateLogged = true;
+      DebugLog.instance.add('NovaDriftGame.update first tick (game loop is running).');
+    }
 
     _updateParticles(dt);
 

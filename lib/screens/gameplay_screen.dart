@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:flame/game.dart';
 import 'package:flutter/material.dart';
 
 import '../core/app_text.dart';
 import '../core/app_theme.dart';
+import '../core/debug_log.dart';
 import '../game/nova_drift_game.dart';
 import '../widgets/game_button.dart';
 
@@ -18,8 +21,169 @@ class GameplayScreen extends StatefulWidget {
   State<GameplayScreen> createState() => _GameplayScreenState();
 }
 
-class _GameplayScreenState extends State<GameplayScreen> {
-  late final NovaDriftGame _game = NovaDriftGame(mode: widget.mode);
+class _GameplayScreenState extends State<GameplayScreen>
+    with WidgetsBindingObserver {
+  // `key` on the game forces Flutter to throw away the old GameWidget
+  // element and mount a brand-new one on retry(), which is what
+  // actually gets Flame to re-run its attach/onLoad sequence from
+  // scratch. Just swapping `_game` isn't enough on its own.
+  Key _gameKey = UniqueKey();
+  late NovaDriftGame _game = NovaDriftGame(mode: widget.mode);
+
+  Timer? _watchdog;
+  bool _showRecovery = false;
+  bool _firstFrameLogged = false;
+  bool _loadingBuilderLogged = false;
+
+  /// Read directly from the platform layer (the raw window/view the
+  /// Flutter engine is drawing into) instead of MediaQuery or
+  /// LayoutBuilder. Both of those go through the widget/element/render
+  /// tree, and on this device that whole chain was reporting a
+  /// permanent (0,0) for this screen no matter how it was queried -
+  /// even with GameWidget mounted directly, with no wrapper at all.
+  /// PlatformDispatcher.views bypasses that tree completely and reads
+  /// the window size the engine itself is using, so it can't be
+  /// affected by whatever was breaking the widget-tree-based lookups.
+  Size? _platformSize;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    DebugLog.instance.add('GameplayScreen.initState (mode=${widget.mode}).');
+    DebugLog.instance.add(
+      'GameplayScreen: initial lifecycle state = '
+      '${WidgetsBinding.instance.lifecycleState}.',
+    );
+    _readPlatformSize();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_firstFrameLogged) {
+        _firstFrameLogged = true;
+        DebugLog.instance.add('GameplayScreen: first frame rendered.');
+      }
+    });
+    _armWatchdog();
+    _pumpFrames();
+  }
+
+  /// Belt-and-suspenders: repeatedly asks the engine to schedule a
+  /// frame for a few seconds after this screen appears. Costs nothing
+  /// if frames are already flowing normally. If the scheduler was ever
+  /// stuck (not producing frames at all, which is what stalls Flame's
+  /// entire Ticker-driven game loop - onLoad included), this gives it
+  /// repeated nudges to start again instead of waiting on a single
+  /// nudge that might get missed.
+  void _pumpFrames() {
+    for (var i = 1; i <= 25; i++) {
+      Timer(Duration(milliseconds: 200 * i), () {
+        if (!mounted) return;
+        WidgetsBinding.instance.scheduleFrame();
+      });
+    }
+  }
+
+  void _readPlatformSize() {
+    final views = WidgetsBinding.instance.platformDispatcher.views;
+    if (views.isEmpty) {
+      DebugLog.instance
+          .add('WARNING: PlatformDispatcher.views is empty.');
+      return;
+    }
+    final view = views.first;
+    final physical = view.physicalSize;
+    final ratio = view.devicePixelRatio;
+    if (physical.width <= 0 || physical.height <= 0 || ratio <= 0) {
+      DebugLog.instance.add(
+        'WARNING: platform view size unusable '
+        '(physical=$physical, devicePixelRatio=$ratio).',
+      );
+      return;
+    }
+    final logical = Size(physical.width / ratio, physical.height / ratio);
+    if (logical != _platformSize) {
+      DebugLog.instance.add(
+        'GameplayScreen: platform size = ${logical.width}x${logical.height} '
+        '(was $_platformSize).',
+      );
+      if (mounted) {
+        setState(() => _platformSize = logical);
+      } else {
+        _platformSize = logical;
+      }
+    }
+  }
+
+  // Fires on rotation, keyboard, system UI changes, etc. - keeps
+  // _platformSize current if it ever legitimately changes after the
+  // initial read.
+  @override
+  void didChangeMetrics() {
+    super.didChangeMetrics();
+    _readPlatformSize();
+  }
+
+  // If Flutter ever thinks this screen isn't "resumed" (e.g. a stuck
+  // system-UI/orientation transition on some devices), the scheduler
+  // stops producing animation frames - which is also what drives
+  // Flame's whole game loop (onLoad/onGameResize/update all ride on
+  // it). This log is the only way to actually confirm that's what's
+  // happening versus guessing from silence.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    DebugLog.instance.add('GameplayScreen: app lifecycle state = $state.');
+    // Nudge the engine to keep producing frames regardless of what it
+    // currently thinks its lifecycle state is - cheap and harmless if
+    // frames were already flowing, but potentially unsticks Flame's
+    // Ticker-driven game loop if they weren't.
+    WidgetsBinding.instance.scheduleFrame();
+  }
+
+  /// Root cause of the "stuck on the loading spinner forever" bug:
+  /// if Flame's GameWidget ever gets attached while its parent reports
+  /// a zero/degenerate size (e.g. mid page-transition, or while the
+  /// forced landscape orientation is still settling right after
+  /// launch), some Flame versions never retry - the loadingBuilder
+  /// just stays up indefinitely even though nothing is actually wrong
+  /// with the game code. Sizing GameWidget from [_platformSize] instead
+  /// of the widget tree means it always gets sane numbers even when
+  /// MediaQuery/LayoutBuilder along the way are stuck reporting zero.
+  ///
+  /// The watchdog + manual recovery banner below is a second, belt-
+  /// and-suspenders safety net: if `onLoad` somehow still doesn't
+  /// finish in time (e.g. a genuine bug gets introduced later), the
+  /// player is never left staring at a spinner with no way out.
+  void _armWatchdog() {
+    _watchdog?.cancel();
+    _showRecovery = false;
+    _watchdog = Timer(const Duration(seconds: 5), () {
+      if (!mounted) return;
+      if (!_game.isLoaded) {
+        DebugLog.instance.add(
+          'WARNING: watchdog fired - onLoad still not done 5s after '
+          'GameplayScreen appeared. Showing manual recovery banner.',
+        );
+        setState(() => _showRecovery = true);
+      }
+    });
+  }
+
+  void _retry() {
+    DebugLog.instance.add('GameplayScreen: manual retry requested.');
+    setState(() {
+      _game = NovaDriftGame(mode: widget.mode);
+      _gameKey = UniqueKey();
+    });
+    _readPlatformSize();
+    _armWatchdog();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _watchdog?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -28,47 +192,144 @@ class _GameplayScreenState extends State<GameplayScreen> {
       body: Stack(
         children: [
           Positioned.fill(
-            child: GameWidget(
-              game: _game,
-              // Previously a failure anywhere during load (or a widget
-              // exception while the game had no size yet) just left the
-              // player staring at the plain navy backgroundColor() with
-              // nothing on it - the "blue screen" bug. These two
-              // builders make sure there's always something on screen:
-              // a spinner while it's genuinely still loading, and the
-              // real error message (instead of nothing) if it fails.
-              loadingBuilder: (context) => const ColoredBox(
-                color: Color(0xFF13315C),
-                child: Center(
-                  child: CircularProgressIndicator(color: Colors.white70),
-                ),
-              ),
-              errorBuilder: (context, error) => ColoredBox(
-                color: const Color(0xFF3C0808),
-                child: Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(20),
-                    child: Text(
-                      'The game failed to load:\n$error',
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(color: Colors.white),
+            child: Builder(
+              builder: (context) {
+                final size = _platformSize;
+                if (size == null) {
+                  DebugLog.instance.add(
+                    'GameplayScreen: waiting for platform size before '
+                    'mounting the game.',
+                  );
+                  return const ColoredBox(
+                    color: Color(0xFF13315C),
+                    child: Center(
+                      child: CircularProgressIndicator(color: Colors.white70),
                     ),
+                  );
+                }
+                DebugLog.instance.add(
+                  'GameplayScreen: constructing GameWidget widget instance '
+                  '(size ${size.width}x${size.height}).',
+                );
+                return Align(
+                  alignment: Alignment.topLeft,
+                  child: SizedBox(
+                    width: size.width,
+                    height: size.height,
+                    child: GameWidget(
+                      key: _gameKey,
+                      game: _game,
+                      // DIAGNOSTIC: deliberately NOT the same colour as the
+                      // Scaffold behind it. If the screen you actually see
+                      // is plain navy blue with none of this magenta, that
+                      // proves GameWidget's own Flutter-side widget is
+                      // never even building - the bug is above/outside
+                      // GameWidget entirely, not inside Flame's loading
+                      // pipeline. If you DO see magenta, GameWidget is
+                      // building fine and the bug is purely inside Flame's
+                      // Game.onLoad() pipeline.
+                      loadingBuilder: (context) {
+                        if (!_loadingBuilderLogged) {
+                          _loadingBuilderLogged = true;
+                          DebugLog.instance.add(
+                            'GameplayScreen: GameWidget.loadingBuilder '
+                            'actually built (Flutter side is fine; the '
+                            'bug is inside Flame\'s own load pipeline).',
+                          );
+                        }
+                        return const ColoredBox(
+                          color: Color(0xFFCC00CC),
+                          child: Center(
+                            child: Text(
+                              'FLAME LOADING…',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 28,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                      errorBuilder: (context, error) => ColoredBox(
+                        color: const Color(0xFF3C0808),
+                        child: Center(
+                          child: Padding(
+                            padding: const EdgeInsets.all(20),
+                            child: Text(
+                              'The game failed to load:\n$error',
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(color: Colors.white),
+                            ),
+                          ),
+                        ),
+                      ),
+                      overlayBuilderMap: {
+                        'intro': (context, game) =>
+                            _IntroOverlay(game: game as NovaDriftGame),
+                        'tutorial': (context, game) =>
+                            _TutorialOverlay(game: game as NovaDriftGame),
+                        'dead': (context, game) =>
+                            _DeadOverlay(game: game as NovaDriftGame),
+                        'complete': (context, game) =>
+                            _CompleteOverlay(game: game as NovaDriftGame),
+                      },
+                      initialActiveOverlays: const ['intro'],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+          // Manual recovery banner: only ever appears if the watchdog
+          // above genuinely fires. Lets the player retry or bail out
+          // instead of being stuck on a spinner forever.
+          if (_showRecovery)
+            Positioned.fill(
+              child: Container(
+                color: Colors.black.withValues(alpha: 0.75),
+                alignment: Alignment.center,
+                child: Container(
+                  width: 300,
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF3C0808),
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: Colors.white24, width: 2),
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text(
+                        'Taking longer than expected to load…',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: Colors.white),
+                      ),
+                      const SizedBox(height: 16),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: GameButton(
+                              label: 'EXIT',
+                              onPressed: () => Navigator.of(context).pop(),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: GameButton(
+                              label: 'RETRY',
+                              filled: true,
+                              fillTextColor: Colors.white,
+                              onPressed: _retry,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
                 ),
               ),
-              overlayBuilderMap: {
-                'intro': (context, game) =>
-                    _IntroOverlay(game: game as NovaDriftGame),
-                'tutorial': (context, game) =>
-                    _TutorialOverlay(game: game as NovaDriftGame),
-                'dead': (context, game) =>
-                    _DeadOverlay(game: game as NovaDriftGame),
-                'complete': (context, game) =>
-                    _CompleteOverlay(game: game as NovaDriftGame),
-              },
-              initialActiveOverlays: const ['intro'],
             ),
-          ),
           // Back button + progress chip - hidden during intro/tutorial,
           // which have their own dedicated top bars.
           ValueListenableBuilder<RunPhase>(

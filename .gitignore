@@ -1,0 +1,18 @@
+# Flutter / Dart
+.dart_tool/
+.packages
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+*.iml
+.idea/
+
+# Platform folders - generated fresh by the CI workflow
+# (flutter create . --platforms=android), not committed.
+android/
+ios/
+
+# Misc
+.DS_Store
+*.log
+.env*.local

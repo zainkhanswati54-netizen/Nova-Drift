@@ -69,19 +69,27 @@ Future<void> main() async {
       DebugLog.instance.add('ERROR (Flutter): ${details.exceptionAsString()}');
     };
 
-    // Landscape-only, fullscreen - like the reference game.
-    await SystemChrome.setPreferredOrientations([
-      DeviceOrientation.landscapeLeft,
-      DeviceOrientation.landscapeRight,
-    ]);
-    await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-    DebugLog.instance.add('Orientation locked, immersive mode set.');
-
     await GameState.instance.load();
     DebugLog.instance.add('GameState loaded (gems=${GameState.instance.gems}).');
 
     runApp(const NovaDriftApp());
     DebugLog.instance.add('runApp called.');
+
+    // Landscape-only, fullscreen - like the reference game. Done *after*
+    // runApp/the first frame instead of blocking startup on it: awaiting
+    // these platform calls before runApp has been linked, on some Android
+    // devices, to the engine's frame scheduler getting stuck (never
+    // producing another frame after the orientation/system-UI transition)
+    // - which would also freeze Flame's entire Ticker-driven game loop,
+    // since it rides on the same scheduler.
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await SystemChrome.setPreferredOrientations([
+        DeviceOrientation.landscapeLeft,
+        DeviceOrientation.landscapeRight,
+      ]);
+      await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+      DebugLog.instance.add('Orientation locked, immersive mode set.');
+    });
   }, (error, stack) {
     DebugLog.instance.add('ERROR (uncaught): $error');
     debugPrint('Uncaught error: $error\n$stack');
