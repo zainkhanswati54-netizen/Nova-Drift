@@ -12,11 +12,7 @@ import 'widgets/debug_overlay.dart';
 /// Replaces Flutter's default error box with something that's actually
 /// visible against the game's dark backgrounds, and also logs it to
 /// [DebugLog] so it shows up in the on-screen debug console (tap the
-/// 🐞 button in the corner) - no PC or adb needed to see it. Without
-/// this, a widget that throws during build can render as a
-/// near-invisible grey box in release mode, which is exactly what a
-/// "blank blue screen" bug report usually turns out to be - something
-/// *did* fail, it just wasn't shown anywhere reachable.
+/// 🐞 button in the corner) - no PC or adb needed to see it.
 void _installVisibleErrorScreen() {
   ErrorWidget.builder = (FlutterErrorDetails details) {
     DebugLog.instance.add('ERROR (widget build): ${details.exceptionAsString()}');
@@ -56,9 +52,6 @@ void _installVisibleErrorScreen() {
 }
 
 Future<void> main() async {
-  // Wrapped so any error that would otherwise be swallowed silently in a
-  // release build (leaving the player on a blank screen with no clue why)
-  // gets logged to DebugLog - readable on-device - instead.
   runZonedGuarded(() async {
     WidgetsFlutterBinding.ensureInitialized();
     _installVisibleErrorScreen();
@@ -73,15 +66,10 @@ Future<void> main() async {
     DebugLog.instance.add('GameState loaded (gems=${GameState.instance.gems}).');
 
     runApp(const NovaDriftApp());
-    DebugLog.instance.add('runApp called.');
 
-    // Landscape-only, fullscreen - like the reference game. Done *after*
-    // runApp/the first frame instead of blocking startup on it: awaiting
-    // these platform calls before runApp has been linked, on some Android
-    // devices, to the engine's frame scheduler getting stuck (never
-    // producing another frame after the orientation/system-UI transition)
-    // - which would also freeze Flame's entire Ticker-driven game loop,
-    // since it rides on the same scheduler.
+    // Landscape-only, fullscreen. Done *after* runApp/the first frame
+    // instead of blocking startup on it, so a slow platform-channel
+    // response here can never delay the first screen appearing.
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await SystemChrome.setPreferredOrientations([
         DeviceOrientation.landscapeLeft,
@@ -96,34 +84,51 @@ Future<void> main() async {
   });
 }
 
-class NovaDriftApp extends StatelessWidget {
+class NovaDriftApp extends StatefulWidget {
   const NovaDriftApp({super.key});
+
+  @override
+  State<NovaDriftApp> createState() => _NovaDriftAppState();
+}
+
+class _NovaDriftAppState extends State<NovaDriftApp> {
+  final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
+  OverlayEntry? _debugOverlayEntry;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _showDebugOverlay());
+  }
+
+  // Inserted into the Navigator's own Overlay - the same layer
+  // SnackBars/tooltips use - instead of wrapping every screen's content
+  // in an extra Stack. This guarantees the 🐞 log button can never
+  // affect any screen's layout constraints, while still floating above
+  // whatever screen is currently showing.
+  void _showDebugOverlay() {
+    if (_debugOverlayEntry != null) return;
+    final overlayState = _navigatorKey.currentState?.overlay;
+    if (overlayState == null) return;
+    _debugOverlayEntry = OverlayEntry(
+      builder: (context) => const DebugOverlay(),
+    );
+    overlayState.insert(_debugOverlayEntry!);
+  }
+
+  @override
+  void dispose() {
+    _debugOverlayEntry?.remove();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      navigatorKey: _navigatorKey,
       title: 'Nova Drift',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(useMaterial3: true),
-      // The debug overlay rides on top of every screen (menus AND
-      // gameplay) via this builder, so the 🐞 log button is always
-      // reachable - including on whatever screen ends up blue.
-      builder: (context, child) => Stack(
-        children: [
-          // Positioned.fill forces this to the Stack's actual, definite
-          // fullscreen size. Without it, `child` was a non-positioned
-          // Stack child, which only gets LOOSE constraints (0 up to
-          // max) - normally Scaffold still fills that fine, but it's
-          // one more layout hop between the real window and every
-          // single screen in the app (including GameplayScreen) that
-          // didn't need to exist, and loose constraints propagating
-          // strangely through a widget tree is a known way to end up
-          // with a size that never resolves to what's actually on
-          // screen. Pinning it here removes that hop entirely.
-          if (child != null) Positioned.fill(child: child),
-          const DebugOverlay(),
-        ],
-      ),
       home: const ModeSelectScreen(),
     );
   }

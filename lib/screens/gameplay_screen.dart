@@ -21,90 +21,48 @@ class GameplayScreen extends StatefulWidget {
   State<GameplayScreen> createState() => _GameplayScreenState();
 }
 
-class _GameplayScreenState extends State<GameplayScreen>
-    with WidgetsBindingObserver {
-  // `key` on the game forces Flutter to throw away the old GameWidget
-  // element and mount a brand-new one on retry(), which is what
-  // actually gets Flame to re-run its attach/onLoad sequence from
-  // scratch. Just swapping `_game` isn't enough on its own.
+class _GameplayScreenState extends State<GameplayScreen> {
+  // A new key on retry forces Flutter to discard the old GameWidget
+  // element and mount a fresh one, which is what actually gets Flame to
+  // re-run its attach/onLoad sequence from scratch.
   Key _gameKey = UniqueKey();
   late NovaDriftGame _game = NovaDriftGame(mode: widget.mode);
 
-  Timer? _watchdog;
-  bool _showRecovery = false;
-  bool _firstFrameLogged = false;
-  bool _loadingBuilderLogged = false;
-  bool _bodyConstraintsLogged = false;
+  Timer? _stuckTimer;
+  bool _showRetry = false;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
-    DebugLog.instance.add('GameplayScreen.initState (mode=${widget.mode}).');
-    DebugLog.instance.add(
-      'GameplayScreen: initial lifecycle state = '
-      '${WidgetsBinding.instance.lifecycleState}.',
-    );
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!_firstFrameLogged) {
-        _firstFrameLogged = true;
-        DebugLog.instance.add('GameplayScreen: first frame rendered.');
-      }
-    });
-    _armWatchdog();
+    _armStuckTimer();
   }
 
-  // If Flutter ever thinks this screen isn't "resumed" (e.g. a stuck
-  // system-UI/orientation transition on some devices), the scheduler
-  // stops producing animation frames - which is also what drives
-  // Flame's whole game loop (onLoad/onGameResize/update all ride on
-  // it). This log is the only way to actually confirm that's what's
-  // happening versus guessing from silence.
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    super.didChangeAppLifecycleState(state);
-    DebugLog.instance.add('GameplayScreen: app lifecycle state = $state.');
-    // Nudge the engine to keep producing frames regardless of what it
-    // currently thinks its lifecycle state is - cheap and harmless if
-    // frames were already flowing, but potentially unsticks Flame's
-    // Ticker-driven game loop if they weren't.
-    WidgetsBinding.instance.scheduleFrame();
-  }
-
-  /// Safety net, not the fix: if `onLoad` genuinely doesn't finish in
-  /// time (a real bug in level generation, an asset that hangs, etc.),
-  /// the player is never left staring at a spinner with no way out.
-  /// This used to be doing double duty covering for a layout/sizing
-  /// problem too - that's fixed properly in [build] now, so this timer
-  /// should in practice almost never fire.
-  void _armWatchdog() {
-    _watchdog?.cancel();
-    _showRecovery = false;
-    _watchdog = Timer(const Duration(seconds: 5), () {
-      if (!mounted) return;
-      if (!_game.isLoaded) {
-        DebugLog.instance.add(
-          'WARNING: watchdog fired - onLoad still not done 5s after '
-          'GameplayScreen appeared. Showing manual recovery banner.',
-        );
-        setState(() => _showRecovery = true);
-      }
+  // Simple UX safety net: if the game genuinely never finishes loading
+  // (a real bug, a corrupt asset, whatever), the player gets a way out
+  // instead of staring at a spinner forever.
+  void _armStuckTimer() {
+    _stuckTimer?.cancel();
+    _showRetry = false;
+    _stuckTimer = Timer(const Duration(seconds: 6), () {
+      if (!mounted || _game.isLoaded) return;
+      DebugLog.instance.add(
+        'GameplayScreen: game not loaded 6s after appearing, showing retry.',
+      );
+      setState(() => _showRetry = true);
     });
   }
 
   void _retry() {
-    DebugLog.instance.add('GameplayScreen: manual retry requested.');
     setState(() {
       _game = NovaDriftGame(mode: widget.mode);
       _gameKey = UniqueKey();
     });
-    _armWatchdog();
+    _armStuckTimer();
   }
 
   @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    _watchdog?.cancel();
+    _stuckTimer?.cancel();
     super.dispose();
   }
 
@@ -112,64 +70,47 @@ class _GameplayScreenState extends State<GameplayScreen>
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF13315C),
-      body: LayoutBuilder(
-        builder: (context, constraints) {
-          if (!_bodyConstraintsLogged) {
-            _bodyConstraintsLogged = true;
-            DebugLog.instance.add(
-              'GameplayScreen: Scaffold body constraints = $constraints '
-              '(biggest=${constraints.biggest}).',
-            );
-          }
-          return Stack(
-            children: [
-              _gameArea(),
-              if (_showRecovery) _recoveryBanner(),
-              _hud(),
-            ],
-          );
-        },
+      body: Stack(
+        children: [
+          _gameArea(),
+          if (_showRetry) _retryBanner(),
+          _hud(),
+        ],
       ),
     );
   }
 
-  // GameWidget has its own internal LayoutBuilder and sizes itself from
-  // whatever real constraints its parent gives it - that's the
-  // standard, documented way to use it (see any Flame sample: GameWidget
-  // just drops straight into a Scaffold body/Positioned, no manually-
-  // computed size). Positioned.fill gives it the Stack's real, live
-  // size directly, so there's only one source of truth for it.
+  // GameWidget has its own internal layout logic and sizes itself from
+  // whatever real constraints its parent gives it - the standard,
+  // documented way to use it. Positioned.fill gives it the Stack's
+  // real, live size directly, with nothing in between.
   Widget _gameArea() {
     return Positioned.fill(
       child: GameWidget(
         key: _gameKey,
         game: _game,
-        loadingBuilder: (context) {
-          if (!_loadingBuilderLogged) {
-            _loadingBuilderLogged = true;
-            DebugLog.instance
-                .add('GameplayScreen: GameWidget loadingBuilder built.');
-          }
-          return const ColoredBox(
-            color: Color(0xFF13315C),
+        loadingBuilder: (context) => const ColoredBox(
+          color: Color(0xFF13315C),
+          child: Center(
+            child: CircularProgressIndicator(color: Colors.white70),
+          ),
+        ),
+        errorBuilder: (context, error) {
+          DebugLog.instance.add('ERROR (game load): $error');
+          return ColoredBox(
+            color: const Color(0xFF3C0808),
             child: Center(
-              child: CircularProgressIndicator(color: Colors.white70),
+              child: Padding(
+                padding: const EdgeInsets.all(20),
+                child: Text(
+                  'The game failed to load:\n$error',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.white),
+                ),
+              ),
             ),
           );
         },
-        errorBuilder: (context, error) => ColoredBox(
-          color: const Color(0xFF3C0808),
-          child: Center(
-            child: Padding(
-              padding: const EdgeInsets.all(20),
-              child: Text(
-                'The game failed to load:\n$error',
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: Colors.white),
-              ),
-            ),
-          ),
-        ),
         overlayBuilderMap: {
           'intro': (context, game) => _IntroOverlay(game: game as NovaDriftGame),
           'tutorial': (context, game) =>
@@ -183,9 +124,7 @@ class _GameplayScreenState extends State<GameplayScreen>
     );
   }
 
-  // Only ever appears if the watchdog above genuinely fires. Lets the
-  // player retry or bail out instead of being stuck on a spinner forever.
-  Widget _recoveryBanner() {
+  Widget _retryBanner() {
     return Positioned.fill(
       child: Container(
         color: Colors.black.withValues(alpha: 0.75),
