@@ -12,6 +12,7 @@ import '../widgets/starfield_background.dart';
 import 'gameplay_screen.dart';
 import 'flame_diagnostic_screen.dart';
 import 'level_select_screen.dart';
+import 'minimal_gameplay_screen.dart';
 import 'settings_screen.dart';
 
 /// "SELECT A GAME MODE" - the main menu.
@@ -365,6 +366,23 @@ class _BottomBar extends StatelessWidget {
           label: 'TEST FLAME',
           onPressed: () => Navigator.of(context).push(
             MaterialPageRoute(builder: (_) => const FlameDiagnosticScreen()),
+          ),
+        ),
+        const SizedBox(width: 12),
+        // TEMPORARY diagnostic button - remove once the Flame loading
+        // freeze is confirmed fixed. Loads the REAL NovaDriftGame with
+        // zero extra screen chrome (no HUD, no watchdog UI, no overlay
+        // map), to isolate whether GameplayScreen's own wrapper is the
+        // difference-maker versus the game/app root.
+        GameButton(
+          width: 150,
+          icon: Icons.science,
+          label: 'TEST LEVEL 1',
+          onPressed: () => Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) =>
+                  const MinimalGameplayScreen(mode: 'Classic - World 1'),
+            ),
           ),
         ),
       ],
