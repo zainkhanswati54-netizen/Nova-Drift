@@ -7,9 +7,11 @@ build/
 *.iml
 .idea/
 
-# Platform folders - generated fresh by the CI workflow
-# (flutter create . --platforms=android), not committed.
-android/
+# Platform folders - now committed on purpose so the Impeller-disable
+# patch in android/app/src/main/AndroidManifest.xml survives instead of
+# being wiped out every time `flutter create` regenerates this folder.
+# See: https://github.com/flutter/flutter/issues/176272
+# ios/ still generated fresh - no iOS-specific patch needed.
 ios/
 
 # Misc
