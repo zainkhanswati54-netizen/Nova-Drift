@@ -110,7 +110,17 @@ class NovaDriftApp extends StatelessWidget {
       // reachable - including on whatever screen ends up blue.
       builder: (context, child) => Stack(
         children: [
-          if (child != null) child,
+          // Positioned.fill forces this to the Stack's actual, definite
+          // fullscreen size. Without it, `child` was a non-positioned
+          // Stack child, which only gets LOOSE constraints (0 up to
+          // max) - normally Scaffold still fills that fine, but it's
+          // one more layout hop between the real window and every
+          // single screen in the app (including GameplayScreen) that
+          // didn't need to exist, and loose constraints propagating
+          // strangely through a widget tree is a known way to end up
+          // with a size that never resolves to what's actually on
+          // screen. Pinning it here removes that hop entirely.
+          if (child != null) Positioned.fill(child: child),
           const DebugOverlay(),
         ],
       ),

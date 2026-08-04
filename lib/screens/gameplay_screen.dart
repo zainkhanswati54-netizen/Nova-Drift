@@ -34,6 +34,7 @@ class _GameplayScreenState extends State<GameplayScreen>
   bool _showRecovery = false;
   bool _firstFrameLogged = false;
   bool _loadingBuilderLogged = false;
+  bool _bodyConstraintsLogged = false;
 
   @override
   void initState() {
@@ -111,143 +112,156 @@ class _GameplayScreenState extends State<GameplayScreen>
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF13315C),
-      body: Stack(
-        children: [
-          // GameWidget has its own internal LayoutBuilder and sizes itself
-          // from whatever real constraints its parent gives it - that's
-          // the standard, documented way to use it (see any Flame sample:
-          // GameWidget just drops straight into a Scaffold body/Positioned,
-          // no manually-computed size). The previous version forced a size
-          // into it via Align+SizedBox using a value read separately from
-          // PlatformDispatcher (the raw device window, not the actual box
-          // this widget was laid out in) - two different numbers standing
-          // in for "the size", which is exactly the kind of mismatch that
-          // leaves a widget waiting on layout info it's never actually
-          // going to get. Positioned.fill just gives it the Stack's real,
-          // live size directly, so there's only one source of truth.
-          Positioned.fill(
-            child: GameWidget(
-              key: _gameKey,
-              game: _game,
-              loadingBuilder: (context) {
-                if (!_loadingBuilderLogged) {
-                  _loadingBuilderLogged = true;
-                  DebugLog.instance
-                      .add('GameplayScreen: GameWidget loadingBuilder built.');
-                }
-                return const ColoredBox(
-                  color: Color(0xFF13315C),
-                  child: Center(
-                    child: CircularProgressIndicator(color: Colors.white70),
-                  ),
-                );
-              },
-              errorBuilder: (context, error) => ColoredBox(
-                color: const Color(0xFF3C0808),
-                child: Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(20),
-                    child: Text(
-                      'The game failed to load:\n$error',
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(color: Colors.white),
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          if (!_bodyConstraintsLogged) {
+            _bodyConstraintsLogged = true;
+            DebugLog.instance.add(
+              'GameplayScreen: Scaffold body constraints = $constraints '
+              '(biggest=${constraints.biggest}).',
+            );
+          }
+          return Stack(
+            children: [
+              _gameArea(),
+              if (_showRecovery) _recoveryBanner(),
+              _hud(),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  // GameWidget has its own internal LayoutBuilder and sizes itself from
+  // whatever real constraints its parent gives it - that's the
+  // standard, documented way to use it (see any Flame sample: GameWidget
+  // just drops straight into a Scaffold body/Positioned, no manually-
+  // computed size). Positioned.fill gives it the Stack's real, live
+  // size directly, so there's only one source of truth for it.
+  Widget _gameArea() {
+    return Positioned.fill(
+      child: GameWidget(
+        key: _gameKey,
+        game: _game,
+        loadingBuilder: (context) {
+          if (!_loadingBuilderLogged) {
+            _loadingBuilderLogged = true;
+            DebugLog.instance
+                .add('GameplayScreen: GameWidget loadingBuilder built.');
+          }
+          return const ColoredBox(
+            color: Color(0xFF13315C),
+            child: Center(
+              child: CircularProgressIndicator(color: Colors.white70),
+            ),
+          );
+        },
+        errorBuilder: (context, error) => ColoredBox(
+          color: const Color(0xFF3C0808),
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Text(
+                'The game failed to load:\n$error',
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.white),
+              ),
+            ),
+          ),
+        ),
+        overlayBuilderMap: {
+          'intro': (context, game) => _IntroOverlay(game: game as NovaDriftGame),
+          'tutorial': (context, game) =>
+              _TutorialOverlay(game: game as NovaDriftGame),
+          'dead': (context, game) => _DeadOverlay(game: game as NovaDriftGame),
+          'complete': (context, game) =>
+              _CompleteOverlay(game: game as NovaDriftGame),
+        },
+        initialActiveOverlays: const ['intro'],
+      ),
+    );
+  }
+
+  // Only ever appears if the watchdog above genuinely fires. Lets the
+  // player retry or bail out instead of being stuck on a spinner forever.
+  Widget _recoveryBanner() {
+    return Positioned.fill(
+      child: Container(
+        color: Colors.black.withValues(alpha: 0.75),
+        alignment: Alignment.center,
+        child: Container(
+          width: 300,
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: const Color(0xFF3C0808),
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: Colors.white24, width: 2),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'Taking longer than expected to load…',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.white),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Expanded(
+                    child: GameButton(
+                      label: 'EXIT',
+                      onPressed: () => Navigator.of(context).pop(),
                     ),
                   ),
-                ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: GameButton(
+                      label: 'RETRY',
+                      filled: true,
+                      fillTextColor: Colors.white,
+                      onPressed: _retry,
+                    ),
+                  ),
+                ],
               ),
-              overlayBuilderMap: {
-                'intro': (context, game) =>
-                    _IntroOverlay(game: game as NovaDriftGame),
-                'tutorial': (context, game) =>
-                    _TutorialOverlay(game: game as NovaDriftGame),
-                'dead': (context, game) => _DeadOverlay(game: game as NovaDriftGame),
-                'complete': (context, game) =>
-                    _CompleteOverlay(game: game as NovaDriftGame),
-              },
-              initialActiveOverlays: const ['intro'],
-            ),
+            ],
           ),
-          // Manual recovery banner: only ever appears if the watchdog
-          // above genuinely fires. Lets the player retry or bail out
-          // instead of being stuck on a spinner forever.
-          if (_showRecovery)
-            Positioned.fill(
-              child: Container(
-                color: Colors.black.withValues(alpha: 0.75),
-                alignment: Alignment.center,
-                child: Container(
-                  width: 300,
-                  padding: const EdgeInsets.all(20),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF3C0808),
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(color: Colors.white24, width: 2),
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Text(
-                        'Taking longer than expected to load…',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(color: Colors.white),
-                      ),
-                      const SizedBox(height: 16),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: GameButton(
-                              label: 'EXIT',
-                              onPressed: () => Navigator.of(context).pop(),
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: GameButton(
-                              label: 'RETRY',
-                              filled: true,
-                              fillTextColor: Colors.white,
-                              onPressed: _retry,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          // Back button + progress chip - hidden during intro/tutorial,
-          // which have their own dedicated top bars.
-          ValueListenableBuilder<RunPhase>(
-            valueListenable: _game.phaseNotifier,
-            builder: (context, phase, _) {
-              final showHud =
-                  phase == RunPhase.playing ||
-                  phase == RunPhase.dead ||
-                  phase == RunPhase.complete;
-              if (!showHud) return const SizedBox.shrink();
-              return SafeArea(
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Row(
-                    children: [
-                      GameButton(
-                        width: 56,
-                        icon: Icons.arrow_back,
-                        onPressed: () => Navigator.of(context).pop(),
-                      ),
-                      const SizedBox(width: 10),
-                      _PowerUpHud(game: _game),
-                      const Spacer(),
-                      _ProgressChip(game: _game),
-                    ],
-                  ),
-                ),
-              );
-            },
-          ),
-        ],
+        ),
       ),
+    );
+  }
+
+  // Back button + progress chip - hidden during intro/tutorial, which
+  // have their own dedicated top bars.
+  Widget _hud() {
+    return ValueListenableBuilder<RunPhase>(
+      valueListenable: _game.phaseNotifier,
+      builder: (context, phase, _) {
+        final showHud = phase == RunPhase.playing ||
+            phase == RunPhase.dead ||
+            phase == RunPhase.complete;
+        if (!showHud) return const SizedBox.shrink();
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Row(
+              children: [
+                GameButton(
+                  width: 56,
+                  icon: Icons.arrow_back,
+                  onPressed: () => Navigator.of(context).pop(),
+                ),
+                const SizedBox(width: 10),
+                _PowerUpHud(game: _game),
+                const Spacer(),
+                _ProgressChip(game: _game),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }
