@@ -17,7 +17,7 @@ class DailyRewardScreen(game: NovaDriftGame) : BaseScreen(game) {
 
     // Reward values read clockwise from the top wedge in the reference image.
     private val segmentValues = listOf(1000, 300, 400, 50, 200, -1, 200, 100) // -1 = "special" wedge
-    private lateinit var wheelImage: Image
+    private val wheelImage: Image = Image(TextureFactory.wheelTexture(320, 8, Palette.WHEEL_LIGHT, Palette.WHEEL_DARK))
     private var spinning = false
 
     init {
@@ -31,8 +31,6 @@ class DailyRewardScreen(game: NovaDriftGame) : BaseScreen(game) {
         root.add(Label("DAILY REWARD", game.skin, "title")).padTop(20f).colspan(2).row()
 
         val wheelStack = Table()
-        val wheelTexture = TextureFactory.wheelTexture(320, segmentValues.size, Palette.WHEEL_LIGHT, Palette.WHEEL_DARK)
-        wheelImage = Image(wheelTexture)
         wheelImage.setOrigin(160f, 160f)
         val hub = Image(TextureFactory.circle(48, Palette.REWARD_BG_BOTTOM))
 

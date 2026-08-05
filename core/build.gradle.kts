@@ -14,5 +14,5 @@ kotlin {
 
 dependencies {
     val gdx = project.findProperty("gdxVersion") as String? ?: "1.12.1"
-    implementation("com.badlogicgames.gdx:gdx:$gdx")
+    api("com.badlogicgames.gdx:gdx:$gdx")
 }

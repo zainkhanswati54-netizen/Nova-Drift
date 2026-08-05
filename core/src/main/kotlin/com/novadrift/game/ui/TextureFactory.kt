@@ -105,7 +105,7 @@ object TextureFactory {
         pixmap.fillCircle(x + w - r - 1, y + h - r - 1, r)
     }
 
-    private fun drawRoundedRectBorder(pixmap: Pixmap, x: Int, y: Int, w: Int, h: Int, r: Int, color: Color, thickness: Int) {
+    private fun drawRoundedRectBorder(pixmap: Pixmap, x: Int, y: Int, w: Int, h: Int, @Suppress("UNUSED_PARAMETER") r: Int, color: Color, thickness: Int) {
         pixmap.setColor(color)
         for (i in 0 until thickness) {
             pixmap.drawRectangle(x + i, y + i, w - 2 * i, h - 2 * i)
